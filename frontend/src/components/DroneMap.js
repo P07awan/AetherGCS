@@ -175,9 +175,9 @@ export default function DroneMap() {
       </MapContainer>
 
       {/* Map overlays */}
-      <div className="absolute top-3 left-3 z-[500] bg-zinc-900/90 backdrop-blur border border-zinc-800 px-3 py-1.5">
-        <div className="font-mono text-[10px] text-zinc-500">
-          CLICK MAP TO ADD WAYPOINT ({draftWaypoints.length})
+      <div className="absolute top-3 left-3 z-[500] bg-zinc-900 border border-zinc-700 px-3 py-1.5">
+        <div className="font-mono text-[10px] text-zinc-200">
+          CLICK MAP TO ADD WAYPOINT (<span className="text-[#FFB000]">{draftWaypoints.length}</span>)
         </div>
       </div>
 
@@ -185,26 +185,26 @@ export default function DroneMap() {
         <button
           data-testid="btn-map-fit-all"
           onClick={fitAll}
-          className="bg-zinc-900/90 backdrop-blur border border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-8 px-3 text-[11px] font-mono uppercase"
+          className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 px-3 text-[11px] font-mono uppercase"
         >
           Fit All
         </button>
         <button
           data-testid="btn-map-center-active"
           onClick={centerActive}
-          className="bg-zinc-900/90 backdrop-blur border border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-8 w-8 flex items-center justify-center"
+          className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 w-8 flex items-center justify-center"
         >
           <Crosshair className="w-4 h-4 text-[#FFB000]" />
         </button>
       </div>
 
       {activeDrone && (
-        <div className="absolute bottom-3 left-3 z-[500] bg-zinc-900/90 backdrop-blur border border-zinc-800 px-3 py-2 font-mono text-[10px] leading-relaxed">
+        <div className="absolute bottom-3 left-3 z-[500] bg-zinc-900 border border-zinc-700 px-3 py-2 font-mono text-[10px] leading-relaxed">
           <div className="text-[#FFB000] font-bold">{activeDrone.name}</div>
-          <div className="text-zinc-400">
+          <div className="text-zinc-200">
             {activeDrone.telemetry.latitude.toFixed(6)}, {activeDrone.telemetry.longitude.toFixed(6)}
           </div>
-          <div className="text-zinc-500">
+          <div className="text-zinc-300">
             ALT {activeDrone.telemetry.altitude_relative.toFixed(1)}m · HDG {activeDrone.telemetry.heading.toFixed(0)}° · GS {activeDrone.telemetry.ground_speed.toFixed(1)} m/s
           </div>
         </div>

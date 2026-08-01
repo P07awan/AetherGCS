@@ -10,7 +10,7 @@ export default function StatusBar() {
   return (
     <div
       data-testid="status-bar"
-      className="h-8 border-t border-zinc-900 bg-black flex items-center px-4 text-xs font-mono text-zinc-500 justify-between"
+      className="h-8 border-t border-zinc-700 bg-zinc-950 flex items-center px-4 text-xs font-mono text-zinc-300 justify-between"
     >
       <div className="flex items-center gap-4">
         <span className="flex items-center gap-1.5">

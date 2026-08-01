@@ -4,23 +4,23 @@ import { Progress } from "@/components/ui/progress";
 import { Activity, Navigation, Satellite, Gauge } from "lucide-react";
 
 const Row = ({ label, value, unit, testid, accent }) => (
-  <div className="flex items-baseline justify-between py-1 border-b border-zinc-900/60">
-    <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
+  <div className="flex items-baseline justify-between py-1 border-b border-zinc-800/60">
+    <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">{label}</span>
     <span
       data-testid={testid}
-      className={`font-mono text-sm ${accent || "text-zinc-100"} tabular-nums`}
+      className={`font-mono text-sm ${accent || "text-zinc-50"} tabular-nums`}
     >
       {value}
-      {unit && <span className="text-zinc-500 ml-0.5 text-[10px]">{unit}</span>}
+      {unit && <span className="text-zinc-400 ml-0.5 text-[10px]">{unit}</span>}
     </span>
   </div>
 );
 
 const Section = ({ title, icon: Icon, children }) => (
-  <div className="border-b border-zinc-800">
-    <div className="h-8 px-3 flex items-center gap-2 bg-zinc-900/60 border-b border-zinc-900">
+  <div className="border-b border-zinc-700">
+    <div className="h-8 px-3 flex items-center gap-2 bg-zinc-800 border-b border-zinc-700">
       {Icon && <Icon className="w-3.5 h-3.5 text-[#FFB000]" />}
-      <span className="font-display font-black text-[11px] tracking-widest text-zinc-300">
+      <span className="font-display font-black text-[11px] tracking-widest text-zinc-100">
         {title}
       </span>
     </div>
@@ -49,9 +49,9 @@ export default function TelemetryPanel() {
   return (
     <div
       data-testid="telemetry-panel"
-      className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden"
+      className="w-80 shrink-0 border-l border-zinc-700 bg-zinc-900 flex flex-col overflow-hidden"
     >
-      <div className="h-10 px-3 flex items-center justify-between border-b border-zinc-800">
+      <div className="h-10 px-3 flex items-center justify-between border-b border-zinc-700 bg-zinc-800/60">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${statusDot(d)}`} />
           <span className="font-display font-black text-sm text-zinc-100 truncate">

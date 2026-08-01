@@ -51,26 +51,26 @@ export default function GCSPage() {
   }, []);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-200 overflow-hidden">
+    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
       <TopToolbar />
       <div className="flex-1 flex overflow-hidden">
         <DroneListSidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
           <DroneMap />
-          <div className="h-72 border-t border-zinc-800 bg-zinc-950 flex flex-col">
+          <div className="h-72 border-t border-zinc-700 bg-zinc-900 flex flex-col">
             <Tabs defaultValue="mission" className="h-full flex flex-col">
-              <TabsList className="h-9 bg-transparent border-b border-zinc-800 rounded-none justify-start px-2 gap-1">
+              <TabsList className="h-9 bg-zinc-800/60 border-b border-zinc-700 rounded-none justify-start px-2 gap-1">
                 <TabsTrigger
                   data-testid="tab-mission"
                   value="mission"
-                  className="rounded-none data-[state=active]:bg-zinc-900 data-[state=active]:text-[#FFB000] data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-[#FFB000] text-[11px] font-mono uppercase tracking-wider"
+                  className="rounded-none data-[state=active]:bg-zinc-950 data-[state=active]:text-[#FFB000] data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-[#FFB000] text-[11px] font-mono uppercase tracking-wider text-zinc-300"
                 >
                   Mission Planner
                 </TabsTrigger>
                 <TabsTrigger
                   data-testid="tab-history"
                   value="history"
-                  className="rounded-none data-[state=active]:bg-zinc-900 data-[state=active]:text-[#00F0FF] data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-[#00F0FF] text-[11px] font-mono uppercase tracking-wider"
+                  className="rounded-none data-[state=active]:bg-zinc-950 data-[state=active]:text-[#00F0FF] data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-[#00F0FF] text-[11px] font-mono uppercase tracking-wider text-zinc-300"
                 >
                   Command Log
                 </TabsTrigger>

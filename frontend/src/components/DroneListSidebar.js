@@ -15,10 +15,10 @@ export default function DroneListSidebar() {
   return (
     <div
       data-testid="drone-list-sidebar"
-      className="w-72 shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col"
+      className="w-72 shrink-0 border-r border-zinc-700 bg-zinc-900 flex flex-col"
     >
-      <div className="h-10 px-3 flex items-center justify-between border-b border-zinc-800">
-        <span className="font-display font-black text-[11px] tracking-widest text-zinc-400">
+      <div className="h-10 px-3 flex items-center justify-between border-b border-zinc-700 bg-zinc-800/60">
+        <span className="font-display font-black text-[11px] tracking-widest text-zinc-200">
           FLEET // {drones.length}
         </span>
         <div className="flex gap-1">
@@ -57,8 +57,8 @@ export default function DroneListSidebar() {
               key={d.id}
               data-testid={`drone-row-${d.id}`}
               onClick={() => setActive(d.id)}
-              className={`px-3 py-2.5 border-b border-zinc-900 cursor-pointer group ${
-                active ? "bg-zinc-900" : "hover:bg-zinc-900/60"
+              className={`px-3 py-2.5 border-b border-zinc-800 cursor-pointer group ${
+                active ? "bg-zinc-800" : "hover:bg-zinc-800/60"
               }`}
             >
               <div className="flex items-center gap-2">
@@ -122,7 +122,7 @@ export default function DroneListSidebar() {
         })}
       </div>
 
-      <div className="h-8 px-3 border-t border-zinc-800 flex items-center justify-between font-mono text-[10px] text-zinc-500">
+      <div className="h-8 px-3 border-t border-zinc-700 bg-zinc-800/60 flex items-center justify-between font-mono text-[10px] text-zinc-300">
         <span data-testid="fleet-selected-count">SEL {selectedIds.length}</span>
         <span>ACT {activeId ? activeId.slice(0, 6) : "--"}</span>
       </div>

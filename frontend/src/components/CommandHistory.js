@@ -33,10 +33,10 @@ export default function CommandHistory() {
   };
 
   return (
-    <div data-testid="command-history" className="h-full flex flex-col">
-      <div className="h-10 px-3 border-b border-zinc-800 flex items-center gap-2">
+    <div data-testid="command-history" className="h-full flex flex-col bg-zinc-950">
+      <div className="h-10 px-3 border-b border-zinc-700 bg-zinc-900 flex items-center gap-2">
         <Terminal className="w-3.5 h-3.5 text-[#00F0FF]" />
-        <span className="font-display font-black text-[11px] tracking-widest text-zinc-300">
+        <span className="font-display font-black text-[11px] tracking-widest text-zinc-100">
           COMMAND LOG // {history.length}
         </span>
         <div className="flex-1" />
@@ -56,9 +56,9 @@ export default function CommandHistory() {
           <div
             key={c.id}
             data-testid={`cmd-log-${c.id}`}
-            className="grid grid-cols-[90px_1fr_100px_60px_70px] gap-2 px-3 py-1 border-b border-zinc-900 hover:bg-zinc-900/50 items-center"
+            className="grid grid-cols-[90px_1fr_100px_60px_70px] gap-2 px-3 py-1 border-b border-zinc-800 hover:bg-zinc-900 items-center text-zinc-200"
           >
-            <span className="text-zinc-500">
+            <span className="text-zinc-400">
               {new Date(c.ts).toLocaleTimeString(undefined, { hour12: false })}
             </span>
             <span className="truncate">
@@ -66,7 +66,7 @@ export default function CommandHistory() {
               <span className="text-zinc-500">→</span>{" "}
               <span className="text-zinc-300">{c.drone_name || c.drone_id.slice(0, 6)}</span>
             </span>
-            <span className="text-zinc-500 truncate" title={JSON.stringify(c.params)}>
+            <span className="text-zinc-400 truncate" title={JSON.stringify(c.params)}>
               {Object.keys(c.params || {}).length
                 ? JSON.stringify(c.params).slice(0, 24)
                 : "—"}

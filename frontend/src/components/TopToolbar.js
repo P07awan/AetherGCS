@@ -13,11 +13,11 @@ const IconBtn = ({ label, onClick, testid, variant = "default", disabled, childr
   const base =
     "h-9 px-3 flex items-center gap-2 text-xs font-medium tracking-wide uppercase rounded-sm border transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
   const styles = {
-    default: "bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-200",
+    default: "bg-zinc-800 border-zinc-600 hover:bg-zinc-700 text-zinc-100",
     primary: "bg-[#FFB000] border-[#FFB000] text-black hover:bg-[#FFC033]",
-    danger: "bg-transparent border-[#FF003C]/60 text-[#FF003C] hover:bg-[#FF003C]/10",
-    ghost: "bg-transparent border-transparent text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900",
-    cyan: "bg-transparent border-[#00F0FF]/50 text-[#00F0FF] hover:bg-[#00F0FF]/10",
+    danger: "bg-transparent border-[#FF003C] text-[#FF6685] hover:bg-[#FF003C]/20",
+    ghost: "bg-transparent border-transparent text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800",
+    cyan: "bg-transparent border-[#00F0FF] text-[#00F0FF] hover:bg-[#00F0FF]/15",
   }[variant];
   return (
     <button
@@ -79,7 +79,7 @@ export default function TopToolbar() {
   return (
     <div
       data-testid="top-toolbar"
-      className="h-14 border-b border-zinc-800 bg-zinc-900/90 backdrop-blur-md flex items-center gap-2 px-3 z-40"
+      className="h-14 border-b border-zinc-700 bg-zinc-900 flex items-center gap-2 px-3 z-40"
     >
       <div className="flex items-center gap-2 mr-3">
         <Plane className="w-5 h-5 text-[#FFB000]" />
@@ -93,7 +93,7 @@ export default function TopToolbar() {
         </div>
       </div>
 
-      <div className="h-8 w-px bg-zinc-800 mx-1" />
+      <div className="h-8 w-px bg-zinc-700 mx-1" />
 
       <IconBtn label="Add" testid="btn-add-drone" onClick={() => setAddOpen(true)} variant="cyan">
         <Plus className="w-4 h-4" />
@@ -116,7 +116,7 @@ export default function TopToolbar() {
         <PowerOff className="w-4 h-4" />
       </IconBtn>
 
-      <div className="h-8 w-px bg-zinc-800 mx-1" />
+      <div className="h-8 w-px bg-zinc-700 mx-1" />
 
       <IconBtn label="Arm" testid="btn-arm" onClick={() => run("arm", {}, "Arm")} disabled={!anyConnected}>
         <Radio className="w-4 h-4 text-[#0088FF]" />
@@ -142,7 +142,7 @@ export default function TopToolbar() {
         <Home className="w-4 h-4" />
       </IconBtn>
 
-      <div className="h-8 w-px bg-zinc-800 mx-1" />
+      <div className="h-8 w-px bg-zinc-700 mx-1" />
 
       <IconBtn
         label="Library"
