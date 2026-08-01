@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Copy, Trash2, FolderOpen, Download, Upload as UploadIcon } from "lucide-react";
@@ -101,6 +101,9 @@ export default function MissionLibraryDialog({ open, onOpenChange }) {
               />
             </label>
           </DialogTitle>
+          <DialogDescription className="text-zinc-500 text-xs font-mono">
+            Manage saved missions – load, duplicate, export as JSON, or delete.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="max-h-[60vh] overflow-y-auto">

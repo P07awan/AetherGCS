@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +73,9 @@ export default function AddDroneDialog({ open, onOpenChange }) {
       >
         <DialogHeader>
           <DialogTitle className="font-display tracking-wider">ADD DRONE</DialogTitle>
+          <DialogDescription className="text-zinc-500 text-xs font-mono">
+            Register a new vehicle and open its independent worker connection.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
