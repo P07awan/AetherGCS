@@ -1,0 +1,72 @@
+{
+  "project_name": "Multi-Drone Ground Control Station (GCS)",
+  "theme": "dark_industrial",
+  "typography": {
+    "primary_font": "Chivo",
+    "mono_font": "JetBrains Mono",
+    "body_font": "IBM Plex Sans",
+    "installation_command": "Use Google Fonts for Chivo, JetBrains Mono, and IBM Plex Sans.",
+    "guidelines": "CRITICAL: Do NOT use Inter, Roboto, or Space Grotesk. Use `JetBrains Mono` strictly for ALL telemetry data, coordinates, timestamps, and numeric metrics to prevent layout shifting. Use `Chivo` (Weight 700/900) for authoritative section headers. Use `IBM Plex Sans` for general UI text and labels."
+  },
+  "colors": {
+    "background": "#09090b",
+    "surface": "#18181b",
+    "surface_elevated": "#27272a",
+    "border": "rgba(255, 255, 255, 0.1)",
+    "primary_accent": "#FFB000",
+    "secondary_accent": "#00F0FF",
+    "status": {
+      "connected": "#00FF41",
+      "armed": "#0088FF",
+      "warning": "#FFB000",
+      "disconnected": "#FF003C",
+      "low_battery": "#FF5500"
+    },
+    "text": {
+      "primary": "#F4F4F5",
+      "secondary": "#A1A1AA",
+      "muted": "#71717A"
+    },
+    "guidelines": "CRITICAL: NO purple gradients. Use flat, high-contrast industrial colors. Keep background near-black. Use Phosphor Amber (#FFB000) for primary command actions and Cyan (#00F0FF) for map trails/active states. Status colors must be distinct and immediately recognizable."
+  },
+  "layouts": {
+    "application_shell": "h-screen w-screen overflow-hidden flex flex-col bg-zinc-950 text-zinc-300 font-sans",
+    "top_toolbar": "h-14 border-b border-zinc-800 bg-zinc-900/90 backdrop-blur-md flex items-center justify-between px-4 z-50",
+    "main_content": "flex-1 flex overflow-hidden",
+    "left_sidebar": "w-72 border-r border-zinc-800 bg-zinc-950 flex flex-col",
+    "right_sidebar": "w-80 border-l border-zinc-800 bg-zinc-950 flex flex-col",
+    "center_map": "flex-1 relative bg-[#0a0a0a] z-0",
+    "bottom_panel": "h-64 border-t border-zinc-800 bg-zinc-950 flex flex-col",
+    "status_bar": "h-8 border-t border-zinc-900 bg-black flex items-center px-4 text-xs font-mono text-zinc-500",
+    "grid_density": "Use 'High Density Grid' (Bento Mode B). Tight spacing (gap-2 to gap-4). Every pixel must be utilized. Use CSS grid `grid-cols-12` where applicable inside panels."
+  },
+  "visual_enhancers": {
+    "borders": "1px solid border-zinc-800 or rgba(255,255,255,0.1) on ALL panels. This is the 'Technical Grid' look.",
+    "corners": "CRITICAL: Use max 2px rounded corners (rounded-sm) or sharp corners (rounded-none). Do not use soft, large radii.",
+    "shadows": "Minimal. Avoid soft drop shadows. Rely on crisp borders to establish visual hierarchy.",
+    "map_tiles": "Use CartoDB Dark Matter tiles for Leaflet (`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png`) to blend seamlessly with the dark UI."
+  },
+  "component_instructions": {
+    "buttons": "Flat, sharp edges. Primary action: bg-[#FFB000] text-black hover:bg-[#FFC033]. Secondary: border border-zinc-700 hover:bg-zinc-800.",
+    "telemetry_cards": "Grid layout, mono font for numbers. Right-aligned values for easy scanning.",
+    "drone_list": "Multi-select list items with clear active/selected states. Include tiny status indicator dots.",
+    "data_testid": "MANDATORY. Add `data-testid` to every interactive element, button, list item, map control, and input. e.g., `data-testid=\"btn-arm-drone\"`."
+  },
+  "image_urls": {
+    "drone_avatar": {
+      "url": "https://images.unsplash.com/photo-1687939192416-2b63be25da18?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwyfHxtaWxpdGFyeSUyMGRyb25lJTIwZmx5aW5nJTIwZGFya3xlbnwwfHx8fDE3ODU2MjAyMDJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Dark, moody drone in flight. Use for drone profiles or placeholders."
+    }
+  },
+  "universal_guidelines_for_main_agent": [
+    "CRITICAL: Write ALL React code in `.js` files, NOT `.tsx` files.",
+    "CRITICAL: DO NOT use complete transparent backgrounds in headers or overlays over the map. Use bg-zinc-900/90 with backdrop-blur.",
+    "DO NOT use generic centered layouts. This is a dense, edge-to-edge mission control dashboard. Optimize for high information density.",
+    "NEVER use placeholder dummy data if possible; build dynamic functional state for the GCS.",
+    "Include Shadcn/ui elements (Tabs, ScrollArea, Table, Dialog, Select) but heavily customize them to look industrial (remove soft shadows, sharpen corners).",
+    "Use `lucide-react` for icons (e.g., Crosshair, Plane, Battery, Wifi, Activity).",
+    "Use `sonner` for critical toast alerts (e.g., 'Drone 1 Armed', 'Low Battery Warning'). Toasts should have sharp corners and dark backgrounds.",
+    "Ensure the layout can handle multiple drones (Swarming UI) in the left sidebar and mission paths in the center map."
+  ],
+  "instructions_to_main_agent": "Implement a full edge-to-edge desktop application. Start by setting up the CSS Grid application shell. Mount Leaflet map in the center with dark tiles. Build the top toolbar for overarching commands, the left sidebar for the drone fleet list, the right sidebar for real-time telemetry (using JetBrains Mono), and the bottom panel for the mission planner/command history. Ensure state management allows selecting a drone to view its specific telemetry. Apply data-testid to all interactive components. Do not use generic fonts, gradients, or soft SaaS aesthetics."
+}
