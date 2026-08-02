@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,8 +6,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { dronesApi } from "@/services/api";
-import { Cable, Wifi, Radio, Zap } from "lucide-react";
+import { Cable, Wifi, Radio, Zap, MapPin } from "lucide-react";
 import GcsModal from "@/components/GcsModal";
+import { useGCS } from "@/store/gcsStore";
 
 const SERIAL_PORTS = [
   "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -60,6 +61,7 @@ const Field = ({ label, children }) => (
 );
 
 export default function AddDroneDialog({ open, onOpenChange }) {
+  const userLocation = useGCS((s) => s.userLocation);
   const [name, setName] = useState("Drone Alpha");
   const [sysId, setSysId] = useState(1);
   const [type, setType] = useState("serial");
@@ -72,6 +74,23 @@ export default function AddDroneDialog({ open, onOpenChange }) {
   const [homeLat, setHomeLat] = useState(37.7749);
   const [homeLon, setHomeLon] = useState(-122.4194);
   const [busy, setBusy] = useState(false);
+  const [homeTouched, setHomeTouched] = useState(false);
+
+  // Auto-fill home from user's live GPS while unchanged
+  useEffect(() => {
+    if (userLocation && !homeTouched) {
+      setHomeLat(Number(userLocation.lat.toFixed(6)));
+      setHomeLon(Number(userLocation.lon.toFixed(6)));
+    }
+  }, [userLocation, homeTouched]);
+
+  const useMyLocation = () => {
+    if (!userLocation) return toast.error("GPS not available yet");
+    setHomeLat(Number(userLocation.lat.toFixed(6)));
+    setHomeLon(Number(userLocation.lon.toFixed(6)));
+    setHomeTouched(false);
+    toast.success("Home set to your current location");
+  };
 
   const applyPreset = (p) => {
     const c = p.conf;

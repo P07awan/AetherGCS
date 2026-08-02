@@ -5,6 +5,7 @@ import {
 import { useGCS } from "@/store/gcsStore";
 import { createTelemetrySocket } from "@/services/telemetrySocket";
 import { commandsApi, dronesApi, missionsApi } from "@/services/api";
+import { useUserGeolocation } from "@/hooks/useUserGeolocation";
 import TopToolbar from "@/components/TopToolbar";
 import DroneListSidebar from "@/components/DroneListSidebar";
 import TelemetryPanel from "@/components/TelemetryPanel";
@@ -21,6 +22,8 @@ export default function GCSPage() {
   const addCommandLog = useGCS((s) => s.addCommandLog);
   const setCommandHistory = useGCS((s) => s.setCommandHistory);
   const setMissions = useGCS((s) => s.setMissions);
+
+  useUserGeolocation();
 
   // Initial data + WS
   useEffect(() => {

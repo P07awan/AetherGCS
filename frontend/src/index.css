@@ -101,3 +101,24 @@ html, body, #root {
   transform: rotate(45deg);
   box-shadow: 0 0 8px rgba(0,240,255,0.7);
 }
+
+/* "You are here" pulsing dot */
+.user-marker {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgba(0, 240, 255, 0.15);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.6);
+}
+.user-marker-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #00F0FF;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  animation: user-pulse 1.8s ease-in-out infinite;
+}
+@keyframes user-pulse {
+  0%,100% { transform: scale(1); opacity: 1; }
+  50%     { transform: scale(1.25); opacity: 0.75; }
+}

@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
-import {
-  MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents,
-} from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Polyline, Circle, useMap, useMapEvents } from "react-leaflet";
 import { useGCS, useDroneList, useActiveDrone } from "@/store/gcsStore";
-import { Crosshair } from "lucide-react";
+import { Crosshair, Navigation as NavIcon } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // Custom drone icon with heading rotation
@@ -33,6 +31,13 @@ const homeIcon = L.divIcon({
   iconSize: [22, 22],
   iconAnchor: [11, 11],
   html: `<div class="home-marker"></div>`,
+});
+
+const userIcon = L.divIcon({
+  className: "",
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  html: `<div class="user-marker"><div class="user-marker-dot"></div></div>`,
 });
 
 const waypointIcon = (seq) =>
@@ -70,13 +75,24 @@ export default function DroneMap() {
   const draftAlt = useGCS((s) => s.draftMission.default_altitude);
   const addWaypoint = useGCS((s) => s.addWaypoint);
   const updateWaypoint = useGCS((s) => s.updateWaypoint);
+  const userLocation = useGCS((s) => s.userLocation);
   const mapRef = useRef(null);
+  const centeredOnUserRef = useRef(false);
 
   const center = useMemo(() => {
     if (activeDrone) return [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude];
     if (drones[0]) return [drones[0].telemetry.latitude, drones[0].telemetry.longitude];
+    if (userLocation) return [userLocation.lat, userLocation.lon];
     return [37.7749, -122.4194];
-  }, [activeDrone, drones]);
+  }, [activeDrone, drones, userLocation]);
+
+  // When user location first arrives, fly the map there (unless a drone is already active)
+  useEffect(() => {
+    if (!userLocation || centeredOnUserRef.current || !mapRef.current) return;
+    if (drones.length > 0) return; // don't override drone view
+    mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true, duration: 1.2 });
+    centeredOnUserRef.current = true;
+  }, [userLocation, drones.length]);
 
   const handleMapClick = (e) => {
     addWaypoint({
@@ -94,6 +110,11 @@ export default function DroneMap() {
       [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
       Math.max(mapRef.current.getZoom(), 16)
     );
+  };
+
+  const centerOnUser = () => {
+    if (!userLocation || !mapRef.current) return;
+    mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true });
   };
 
   const fitAll = () => {
@@ -172,6 +193,17 @@ export default function DroneMap() {
             }}
           />
         ))}
+
+        {userLocation && (
+          <>
+            <Circle
+              center={[userLocation.lat, userLocation.lon]}
+              radius={Math.min(userLocation.accuracy || 30, 200)}
+              pathOptions={{ color: "#00F0FF", weight: 1, opacity: 0.6, fillColor: "#00F0FF", fillOpacity: 0.08 }}
+            />
+            <Marker position={[userLocation.lat, userLocation.lon]} icon={userIcon} interactive={false} />
+          </>
+        )}
       </MapContainer>
 
       {/* Map overlays */}
@@ -188,6 +220,15 @@ export default function DroneMap() {
           className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 px-3 text-[11px] font-mono uppercase"
         >
           Fit All
+        </button>
+        <button
+          data-testid="btn-map-my-location"
+          onClick={centerOnUser}
+          disabled={!userLocation}
+          title="Center on my GPS location"
+          className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 w-8 flex items-center justify-center disabled:opacity-40"
+        >
+          <NavIcon className="w-4 h-4 text-[#00F0FF]" />
         </button>
         <button
           data-testid="btn-map-center-active"

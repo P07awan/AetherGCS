@@ -96,6 +96,9 @@ export const useGCS = create((set, get) => ({
     })),
 
   setMissions: (list) => set({ missions: list }),
+
+  userLocation: null,   // {lat, lon, accuracy} from browser geolocation
+  setUserLocation: (loc) => set({ userLocation: loc }),
 }));
 
 // Selectors — arrays wrapped in useShallow to prevent infinite re-renders
