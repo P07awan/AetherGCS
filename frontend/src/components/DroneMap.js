@@ -86,13 +86,12 @@ export default function DroneMap() {
     return [37.7749, -122.4194];
   }, [activeDrone, drones, userLocation]);
 
-  // When user location first arrives, fly the map there (unless a drone is already active)
+  // When user location first arrives, fly the map there (unless the user already interacted with the map)
   useEffect(() => {
     if (!userLocation || centeredOnUserRef.current || !mapRef.current) return;
-    if (drones.length > 0) return; // don't override drone view
     mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true, duration: 1.2 });
     centeredOnUserRef.current = true;
-  }, [userLocation, drones.length]);
+  }, [userLocation]);
 
   const handleMapClick = (e) => {
     addWaypoint({

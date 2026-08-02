@@ -189,13 +189,33 @@ export default function AddDroneDialog({ open, onOpenChange }) {
                    className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono" />
           </Field>
           <Field label="Home Lat">
-            <Input data-testid="input-home-lat" type="number" step="0.0001" value={homeLat} onChange={(e) => setHomeLat(e.target.value)}
+            <Input data-testid="input-home-lat" type="number" step="0.0001" value={homeLat}
+                   onChange={(e) => { setHomeLat(e.target.value); setHomeTouched(true); }}
                    className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
           </Field>
           <Field label="Home Lon">
-            <Input data-testid="input-home-lon" type="number" step="0.0001" value={homeLon} onChange={(e) => setHomeLon(e.target.value)}
+            <Input data-testid="input-home-lon" type="number" step="0.0001" value={homeLon}
+                   onChange={(e) => { setHomeLon(e.target.value); setHomeTouched(true); }}
                    className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
           </Field>
+        </div>
+
+        {/* Use my GPS location */}
+        <div className="flex items-center justify-between -mt-2">
+          <span className="text-[10px] font-mono text-zinc-400">
+            {userLocation
+              ? <>Live GPS: <span className="text-[#00F0FF]">{userLocation.lat.toFixed(5)}, {userLocation.lon.toFixed(5)}</span> · ±{userLocation.accuracy?.toFixed(0)}m</>
+              : "Acquiring GPS…"}
+          </span>
+          <button
+            data-testid="btn-use-my-location"
+            onClick={useMyLocation}
+            disabled={!userLocation}
+            className="text-[10px] font-mono uppercase text-[#00F0FF] border border-[#00F0FF]/50 hover:bg-[#00F0FF]/10 px-2 py-1 flex items-center gap-1.5 disabled:opacity-40"
+          >
+            <MapPin className="w-3 h-3" />
+            Use My Location
+          </button>
         </div>
 
         {/* Type tabs */}
