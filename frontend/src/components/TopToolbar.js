@@ -3,11 +3,13 @@ import { toast } from "sonner";
 import {
   Plane, Power, PowerOff, Plus, Trash2, ShieldAlert, ArrowUpFromDot,
   ArrowDownToDot, Home, Hand, Route as RouteIcon, Upload, Download, Radio,
+  SlidersHorizontal, Grid
 } from "lucide-react";
 import { useGCS, useSelectedDrones } from "@/store/gcsStore";
 import { commandsApi, dronesApi } from "@/services/api";
 import AddDroneDialog from "@/components/AddDroneDialog";
 import MissionLibraryDialog from "@/components/MissionLibraryDialog";
+import SurveyGridDialog from "@/components/SurveyGridDialog";
 
 const IconBtn = ({ label, onClick, testid, variant = "default", disabled, children }) => {
   const base =
@@ -39,6 +41,7 @@ export default function TopToolbar() {
   const drones = useGCS((s) => s.drones);
   const [addOpen, setAddOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [surveyOpen, setSurveyOpen] = useState(false);
 
   const targetIds = () => {
     if (selected.length > 0) return selected.map((d) => d.id);
@@ -69,8 +72,12 @@ export default function TopToolbar() {
     if (!draftMission.waypoints.length) return toast.error("No waypoints in draft mission");
     const ids = targetIds();
     if (!ids.length) return toast.error("Select drones to upload mission");
-    await commandsApi.send(ids, "upload_mission", { waypoints: draftMission.waypoints });
-    toast.success(`Mission uploaded to ${ids.length} drone(s)`);
+    try {
+      await commandsApi.send(ids, "upload_mission", { waypoints: draftMission.waypoints });
+      toast.success(`Mission uploaded to ${ids.length} drone(s)`);
+    } catch (e) {
+      toast.error(`Mission upload failed: ${e.response?.data?.detail || e.message}`);
+    }
   };
 
   const anyConnected = selected.some((d) => d.status === "connected") ||
@@ -145,6 +152,18 @@ export default function TopToolbar() {
       <div className="h-8 w-px bg-zinc-700 mx-1" />
 
       <IconBtn
+        label="Level"
+        testid="btn-level-horizon"
+        onClick={() => useGCS.getState().toggleLevelCard()}
+      >
+        <SlidersHorizontal className="w-4 h-4 text-[#FFB000]" />
+      </IconBtn>
+
+      <IconBtn label="Survey Grid" testid="btn-survey-grid" onClick={() => setSurveyOpen(true)} variant="cyan">
+        <Grid className="w-4 h-4" />
+      </IconBtn>
+
+      <IconBtn
         label="Library"
         testid="btn-mission-library"
         onClick={() => setLibraryOpen(true)}
@@ -176,6 +195,7 @@ export default function TopToolbar() {
 
       <AddDroneDialog open={addOpen} onOpenChange={setAddOpen} />
       <MissionLibraryDialog open={libraryOpen} onOpenChange={setLibraryOpen} />
+      <SurveyGridDialog open={surveyOpen} onOpenChange={setSurveyOpen} />
     </div>
   );
 }

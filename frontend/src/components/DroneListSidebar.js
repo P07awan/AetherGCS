@@ -1,7 +1,8 @@
 import { useGCS, useDroneList } from "@/store/gcsStore";
 import { statusDot } from "@/utils/format";
-import { Plane, Battery, Wifi, WifiOff } from "lucide-react";
+import { Plane, Battery, Wifi, WifiOff, SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import MissionPlannerHUD from "@/components/MissionPlannerHUD";
 
 export default function DroneListSidebar() {
   const drones = useDroneList();
@@ -11,6 +12,8 @@ export default function DroneListSidebar() {
   const selectAll = useGCS((s) => s.selectAll);
   const deselectAll = useGCS((s) => s.deselectAll);
   const setActive = useGCS((s) => s.setActive);
+  const levelCardOpen = useGCS((s) => s.levelCardOpen);
+  const toggleLevelCard = useGCS((s) => s.toggleLevelCard);
 
   return (
     <div
@@ -87,23 +90,29 @@ export default function DroneListSidebar() {
                 <div className="flex items-center gap-1 text-zinc-400">
                   <Battery
                     className={`w-3 h-3 ${
-                      d.telemetry.battery_percent < 20 ? "text-[#FF5500]" : "text-zinc-500"
+                      d.telemetry?.battery_percent != null && d.telemetry.battery_percent < 20
+                        ? "text-[#FF5500]"
+                        : "text-zinc-500"
                     }`}
                   />
                   <span
                     className={
-                      d.telemetry.battery_percent < 20
+                      d.telemetry?.battery_percent != null && d.telemetry.battery_percent < 20
                         ? "text-[#FF5500]"
                         : "text-zinc-300"
                     }
                   >
-                    {d.telemetry.battery_percent.toFixed(0)}%
+                    {d.telemetry?.battery_percent != null
+                      ? `${d.telemetry.battery_percent.toFixed(0)}%`
+                      : "--"}
                   </span>
                 </div>
                 <div className="text-zinc-500 text-right">
                   ALT{" "}
                   <span className="text-zinc-200">
-                    {d.telemetry.altitude_relative.toFixed(1)}m
+                    {d.telemetry?.altitude_relative != null
+                      ? `${d.telemetry.altitude_relative.toFixed(1)}m`
+                      : "--"}
                   </span>
                 </div>
                 <div className="text-zinc-500">
@@ -117,9 +126,44 @@ export default function DroneListSidebar() {
                   )}
                 </div>
               </div>
+              {d.status === "error" && d.last_error && (
+                <div
+                  className="mt-1.5 pl-6 text-[9px] font-mono text-red-400 bg-red-950/40 border border-red-800/50 p-1 rounded-xs truncate"
+                  title={d.last_error}
+                >
+                  ERR: {d.last_error}
+                </div>
+              )}
             </div>
           );
         })}
+
+        {/* Collapsible LEVEL Card */}
+        <div className="border-t border-b border-zinc-700 bg-zinc-900 mt-2">
+          <button
+            type="button"
+            data-testid="sidebar-level-card-header"
+            onClick={toggleLevelCard}
+            className="w-full h-8 px-3 flex items-center justify-between bg-zinc-800/80 border-b border-zinc-700 hover:bg-zinc-800 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-[#FFB000]" />
+              <span className="font-display font-black text-[11px] tracking-widest text-zinc-100">
+                LEVEL
+              </span>
+            </div>
+            {levelCardOpen ? (
+              <ChevronUp className="w-4 h-4 text-zinc-400" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-zinc-400" />
+            )}
+          </button>
+          {levelCardOpen && (
+            <div className="p-2 bg-zinc-950/80 flex items-center justify-center">
+              <MissionPlannerHUD className="w-full shadow-lg" />
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="h-8 px-3 border-t border-zinc-700 bg-zinc-800/60 flex items-center justify-between font-mono text-[10px] text-zinc-300">

@@ -8,7 +8,7 @@ import pytest
 import requests
 import websockets
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://drone-swarm-control-1.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8000").rstrip("/")
 API = f"{BASE_URL}/api"
 WS_URL = API.replace("http", "ws") + "/ws/telemetry"
 
@@ -206,8 +206,7 @@ class TestWebSocket:
                         drone_updates += 1
             return events, drone_updates
 
-        events, drone_updates = asyncio.get_event_loop().run_until_complete(run()) \
-            if not asyncio.get_event_loop().is_running() else asyncio.run(run())
+        events, drone_updates = asyncio.run(run())
         assert events[0] == "snapshot"
         assert drone_updates >= 3, f"expected >=3 drone updates, got {drone_updates}"
         session.delete(f"{API}/drones/{d['id']}", timeout=10)

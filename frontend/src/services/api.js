@@ -11,6 +11,7 @@ export const dronesApi = {
   remove: (id) => client.delete(`/drones/${id}`).then((r) => r.data),
   connect: (id) => client.post(`/drones/${id}/connect`).then((r) => r.data),
   disconnect: (id) => client.post(`/drones/${id}/disconnect`).then((r) => r.data),
+  getSerialPorts: () => client.get("/system/serial-ports").then((r) => r.data),
 };
 
 export const commandsApi = {

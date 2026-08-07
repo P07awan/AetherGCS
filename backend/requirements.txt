@@ -1,5 +1,8 @@
 fastapi==0.110.1
 uvicorn==0.25.0
+pymavlink>=2.4.40
+pyserial>=3.5
+
 boto3>=1.34.129
 requests-oauthlib>=2.0.0
 cryptography>=42.0.8
@@ -23,6 +26,7 @@ requests>=2.31.0
 pandas>=2.2.0
 numpy>=1.26.0
 python-multipart>=0.0.9
-jq>=1.6.0
+# jq>=1.6.0
 typer>=0.9.0
-emergentintegrations==0.2.0
+# emergentintegrations==0.2.0
+

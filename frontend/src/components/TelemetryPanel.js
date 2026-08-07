@@ -44,7 +44,8 @@ export default function TelemetryPanel() {
 
   const t = d.telemetry;
   const bat = t.battery_percent;
-  const batColor = bat < 20 ? "text-[#FF5500]" : bat < 40 ? "text-[#FFB000]" : "text-[#00FF41]";
+  const batKnown = bat != null;
+  const batColor = !batKnown ? "text-zinc-400" : bat < 20 ? "text-[#FF5500]" : bat < 40 ? "text-[#FFB000]" : "text-[#00FF41]";
 
   return (
     <div
@@ -66,12 +67,18 @@ export default function TelemetryPanel() {
       <div className="flex-1 overflow-y-auto">
         <Section title="STATUS" icon={Activity}>
           <Row label="Connection" value={d.status.toUpperCase()} testid="tlm-status"
-               accent={d.status === "connected" ? "text-[#00FF41]" : "text-[#FF003C]"} />
+            accent={d.status === "connected" ? "text-[#00FF41]" : "text-[#FF003C]"} />
           <Row label="Mode" value={t.flight_mode} testid="tlm-mode" accent="text-[#00F0FF]" />
           <Row label="Armed" value={t.armed ? "YES" : "NO"} testid="tlm-armed"
-               accent={t.armed ? "text-[#0088FF]" : "text-zinc-400"} />
+            accent={t.armed ? "text-[#0088FF]" : "text-zinc-400"} />
           <Row label="Flight time" value={fmtDuration(t.flight_time)} testid="tlm-flight-time" />
           <Row label="Firmware" value={d.firmware} accent="text-zinc-400" />
+          <Row label="Last Packet" value={t.heartbeat_ts ? t.heartbeat_ts.slice(11, 19) + "Z" : "--"} accent="text-zinc-400" />
+          {d.last_error && (
+            <div className="mt-2 p-2 bg-red-950/60 border border-red-800 text-red-300 text-[10px] font-mono rounded-xs leading-relaxed">
+              <span className="font-bold text-red-400">ERROR:</span> {d.last_error}
+            </div>
+          )}
         </Section>
 
         <Section title="POWER" icon={Gauge}>
@@ -81,11 +88,11 @@ export default function TelemetryPanel() {
                 Battery
               </span>
               <span data-testid="tlm-battery-pct" className={`font-mono text-lg font-bold ${batColor}`}>
-                {fmt(bat, 0)}%
+                {batKnown ? `${fmt(bat, 0)}%` : "--"}
               </span>
             </div>
             <Progress
-              value={bat}
+              value={batKnown ? bat : 0}
               className="h-1 mt-1 bg-zinc-900 rounded-none [&>div]:bg-current"
             />
           </div>
@@ -98,21 +105,48 @@ export default function TelemetryPanel() {
           <Row label="Longitude" value={fmtLon(t.longitude)} testid="tlm-lon" />
           <Row label="Altitude (MSL)" value={fmt(t.altitude_msl, 1)} unit="m" testid="tlm-alt-msl" />
           <Row label="Altitude (rel)" value={fmt(t.altitude_relative, 1)} unit="m" testid="tlm-alt-rel" />
-          <Row label="Heading" value={fmt(t.heading, 0) + "°"} testid="tlm-heading" />
+          <Row label="Home Ref" value={`${d.home_lat.toFixed(4)}, ${d.home_lon.toFixed(4)}`} accent="text-zinc-400" />
         </Section>
 
-        <Section title="MOTION" icon={Gauge}>
+        <Section title="ATTITUDE & MOTION" icon={Gauge}>
+          <Row label="Pitch" value={fmt(t.pitch, 1) + "°"} testid="tlm-pitch" />
+          <Row label="Roll" value={fmt(t.roll, 1) + "°"} testid="tlm-roll" />
+          <Row label="Heading" value={fmt(t.heading, 0) + "°"} testid="tlm-heading" />
           <Row label="Ground speed" value={fmt(t.ground_speed, 1)} unit="m/s" testid="tlm-gs" />
           <Row label="Air speed" value={fmt(t.air_speed, 1)} unit="m/s" testid="tlm-as" />
         </Section>
 
         <Section title="GNSS" icon={Satellite}>
-          <Row label="Fix type" value={t.gps_fix >= 3 ? "3D" : t.gps_fix >= 2 ? "2D" : "NO FIX"}
-               testid="tlm-fix"
-               accent={t.gps_fix >= 3 ? "text-[#00FF41]" : "text-[#FFB000]"} />
-          <Row label="Satellites" value={t.satellites} testid="tlm-sats" />
+          <Row
+            label="Fix type"
+            value={
+              t.gps_fix == null
+                ? "UNKNOWN"
+                : t.gps_fix === 6
+                ? "RTK FIXED"
+                : t.gps_fix === 5
+                ? "RTK FLOAT"
+                : t.gps_fix === 4
+                ? "DGPS"
+                : t.gps_fix >= 3
+                ? "3D FIX"
+                : t.gps_fix >= 2
+                ? "2D FIX"
+                : "NO FIX"
+            }
+            testid="tlm-fix"
+            accent={
+              t.gps_fix == null
+                ? "text-zinc-500"
+                : t.gps_fix >= 3
+                ? "text-[#00FF41]"
+                : "text-[#FFB000]"
+            }
+          />
+          <Row label="Satellites" value={t.satellites != null ? t.satellites : "--"} testid="tlm-sats" />
+          <Row label="HDOP" value={t.hdop != null ? fmt(t.hdop, 1) : "--"} testid="tlm-hdop" />
           <Row label="Heartbeat" value={t.heartbeat ? "OK" : "LOST"} testid="tlm-heartbeat"
-               accent={t.heartbeat ? "text-[#00FF41]" : "text-[#FF003C]"} />
+            accent={t.heartbeat ? "text-[#00FF41]" : "text-[#FF003C]"} />
         </Section>
       </div>
     </div>

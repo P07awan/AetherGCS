@@ -42,15 +42,23 @@ export default function MissionPlanner() {
     if (!draft.waypoints.length) return toast.error("Add waypoints first");
     const ids = targetIds();
     if (!ids.length) return toast.error("Select a drone");
-    await commandsApi.send(ids, "upload_mission", { waypoints: draft.waypoints });
-    toast.success(`Mission uploaded to ${ids.length} drone(s)`);
+    try {
+      await commandsApi.send(ids, "upload_mission", { waypoints: draft.waypoints });
+      toast.success(`Mission uploaded to ${ids.length} drone(s)`);
+    } catch (e) {
+      toast.error(`Upload failed: ${e.response?.data?.detail || e.message}`);
+    }
   };
 
   const startMission = async () => {
     const ids = targetIds();
     if (!ids.length) return toast.error("Select a drone");
-    await commandsApi.send(ids, "start_mission", {});
-    toast.success("Mission started");
+    try {
+      await commandsApi.send(ids, "start_mission", {});
+      toast.success("Mission started");
+    } catch (e) {
+      toast.error(`Start failed: ${e.response?.data?.detail || e.message}`);
+    }
   };
 
   const pauseMission = async () => {

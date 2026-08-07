@@ -13,7 +13,9 @@ def _now_iso() -> str:
 
 ConnectionType = Literal["udp", "tcp", "serial", "simulator"]
 FlightMode = Literal[
-    "MANUAL", "STABILIZE", "GUIDED", "AUTO", "LOITER", "RTL", "LAND", "POSHOLD"
+    "MANUAL", "STABILIZE", "GUIDED", "AUTO", "LOITER", "RTL", "LAND", "POSHOLD",
+    "ALT_HOLD", "MODE_0", "MODE_1", "MODE_2", "MODE_3", "MODE_4", "MODE_5",
+    "MODE_6", "MODE_7", "MODE_8", "MODE_9", "MODE_10", "MODE_11", "MODE_12",
 ]
 DroneStatus = Literal["disconnected", "connecting", "connected", "error"]
 
@@ -39,11 +41,13 @@ class DroneCreate(BaseModel):
 class Telemetry(BaseModel):
     armed: bool = False
     flight_mode: FlightMode = "STABILIZE"
-    battery_percent: float = 100.0
-    battery_voltage: float = 16.8
-    battery_current: float = 0.0
-    gps_fix: int = 3            # 0=no fix, 3=3D
-    satellites: int = 12
+    # Optional for real drones — None means MAVLink hasn't sent data yet
+    battery_percent: Optional[float] = None   # 0-100 or None (unknown)
+    battery_voltage: Optional[float] = None   # V or None
+    battery_current: Optional[float] = None   # A or None
+    gps_fix: Optional[int] = None             # 0=no fix, 2=2D, 3=3D, None=unknown
+    satellites: Optional[int] = None          # count or None
+    hdop: Optional[float] = None              # horizontal dilution of precision (e.g. 1.2)
     latitude: float = 0.0
     longitude: float = 0.0
     altitude_msl: float = 0.0
@@ -51,6 +55,8 @@ class Telemetry(BaseModel):
     ground_speed: float = 0.0
     air_speed: float = 0.0
     heading: float = 0.0        # degrees 0-360
+    pitch: float = 0.0          # degrees -90 to +90
+    roll: float = 0.0           # degrees -180 to +180
     flight_time: int = 0        # seconds
     heartbeat: bool = True
     heartbeat_ts: str = Field(default_factory=_now_iso)
@@ -63,9 +69,10 @@ class Drone(BaseModel):
     name: str
     system_id: int
     component_id: int
-    firmware: str = "ArduPilot 4.4.0 (SIM)"
+    firmware: str = ""  # populated from heartbeat for real drones
     connection: ConnectionProfile
     status: DroneStatus = "disconnected"
+    last_error: Optional[str] = None
     home_lat: float
     home_lon: float
     home_alt: float

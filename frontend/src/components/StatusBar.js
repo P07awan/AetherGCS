@@ -5,7 +5,7 @@ export default function StatusBar() {
   const drones = useDroneList();
   const connected = drones.filter((d) => d.status === "connected").length;
   const armed = drones.filter((d) => d.telemetry?.armed).length;
-  const low = drones.filter((d) => d.telemetry?.battery_percent < 20 && d.status === "connected");
+  const low = drones.filter((d) => d.telemetry?.battery_percent != null && d.telemetry.battery_percent < 20 && d.status === "connected");
 
   return (
     <div
@@ -16,13 +16,12 @@ export default function StatusBar() {
         <span className="flex items-center gap-1.5">
           <span
             data-testid="status-ws-indicator"
-            className={`w-2 h-2 rounded-full ${
-              wsStatus === "open"
-                ? "bg-[#00FF41]"
-                : wsStatus === "connecting"
+            className={`w-2 h-2 rounded-full ${wsStatus === "open"
+              ? "bg-[#00FF41]"
+              : wsStatus === "connecting"
                 ? "bg-[#FFB000] animate-pulse-glow"
                 : "bg-[#FF003C]"
-            }`}
+              }`}
           />
           <span>WS: {wsStatus.toUpperCase()}</span>
         </span>

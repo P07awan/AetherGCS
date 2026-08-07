@@ -18,6 +18,8 @@ export const useGCS = create((set, get) => ({
   commandHistory: [],
   draftMission: { name: "New Mission", default_altitude: 20, default_speed: 5, waypoints: [] },
   missions: [],
+  levelCardOpen: true,
+  toggleLevelCard: () => set((s) => ({ levelCardOpen: !s.levelCardOpen })),
 
   setSnapshot: (list) => {
     const map = {};

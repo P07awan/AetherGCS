@@ -1,36 +1,72 @@
-import { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Polyline, Circle, useMap, useMapEvents } from "react-leaflet";
 import { useGCS, useDroneList, useActiveDrone } from "@/store/gcsStore";
-import { Crosshair, Navigation as NavIcon } from "lucide-react";
+import { Crosshair, Navigation as NavIcon, Layers, Lock, Unlock } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// Custom drone icon with heading rotation
-const droneIcon = (heading, selected) =>
+const MAP_PROVIDERS = {
+  satellite: {
+    name: "Google Satellite",
+    url: "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+    maxZoom: 20,
+    subdomains: ["mt0", "mt1", "mt2", "mt3"],
+  },
+  hybrid: {
+    name: "Google Hybrid",
+    url: "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+    maxZoom: 20,
+    subdomains: ["mt0", "mt1", "mt2", "mt3"],
+  },
+  dark: {
+    name: "CartoDB Dark",
+    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    maxZoom: 19,
+    subdomains: ["a", "b", "c", "d"],
+  },
+  osm: {
+    name: "OpenStreetMap",
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    maxZoom: 19,
+    subdomains: ["a", "b", "c"],
+  },
+};
+
+// Quadcopter Drone Icon with rotors and directional heading
+const quadcopterIcon = (heading, selected, armed) =>
   L.divIcon({
     className: "",
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    html: `<div class="drone-marker ${selected ? "selected" : ""}" style="transform: rotate(${heading}deg)">
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    html: `<div class="relative w-9 h-9 flex items-center justify-center transition-transform duration-75" style="transform: rotate(${heading}deg)">
       ${renderToStaticMarkup(
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-          <path
-            d="M12 2 L15 12 L12 10 L9 12 Z"
-            fill={selected ? "#FFB000" : "#00F0FF"}
-            stroke="#000"
-            strokeWidth="1"
-          />
-          <circle cx="12" cy="14" r="2" fill={selected ? "#FFB000" : "#00F0FF"} stroke="#000" strokeWidth="0.5" />
-        </svg>
-      )}
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        {/* Quadcopter X Frame */}
+        <line x1="6" y1="6" x2="26" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
+        <line x1="26" y1="6" x2="6" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
+
+        {/* 4 Rotors */}
+        <circle cx="6" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+        <circle cx="26" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+        <circle cx="6" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+        <circle cx="26" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+
+        {/* Forward Nose Direction Arrow */}
+        <path d="M16 2 L21 14 L16 11 L11 14 Z" fill={selected ? "#FFB000" : "#00F0FF"} stroke="#000" strokeWidth="1" />
+
+        {/* Center Body Core */}
+        <circle cx="16" cy="16" r="4.5" fill="#111" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="1.5" />
+        <circle cx="16" cy="16" r="1.5" fill={selected ? "#FFB000" : "#00F0FF"} />
+      </svg>
+    )}
     </div>`,
   });
 
 const homeIcon = L.divIcon({
   className: "",
-  iconSize: [22, 22],
-  iconAnchor: [11, 11],
-  html: `<div class="home-marker"></div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  html: `<div class="w-6 h-6 rounded-full bg-[#FFB000] border-2 border-black flex items-center justify-center font-mono font-bold text-[10px] text-black shadow-md">H</div>`,
 });
 
 const userIcon = L.divIcon({
@@ -53,18 +89,19 @@ function MapClickHandler({ onClick }) {
   return null;
 }
 
-function FitBounds({ drones }) {
+function AutoPanHandler({ activeDrone, autoPan }) {
   const map = useMap();
   useEffect(() => {
-    if (!drones.length) return;
-    const bounds = L.latLngBounds(
-      drones.map((d) => [d.telemetry.latitude, d.telemetry.longitude])
+    if (!autoPan || !activeDrone) return;
+    map.panTo(
+      [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
+      { animate: true, duration: 0.5 }
     );
-    map.fitBounds(bounds.pad(0.2), { animate: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeDrone?.telemetry?.latitude, activeDrone?.telemetry?.longitude, autoPan, map, activeDrone]);
   return null;
 }
+
+import MissionPlannerHUD from "@/components/MissionPlannerHUD";
 
 export default function DroneMap() {
   const drones = useDroneList();
@@ -79,6 +116,12 @@ export default function DroneMap() {
   const mapRef = useRef(null);
   const centeredOnUserRef = useRef(false);
 
+  const [providerKey, setProviderKey] = useState("satellite"); // Default to Satellite map like Mission Planner!
+  const [autoPan, setAutoPan] = useState(true);
+  const [showHud, setShowHud] = useState(true);
+
+  const provider = MAP_PROVIDERS[providerKey] || MAP_PROVIDERS.satellite;
+
   const center = useMemo(() => {
     if (activeDrone) return [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude];
     if (drones[0]) return [drones[0].telemetry.latitude, drones[0].telemetry.longitude];
@@ -86,7 +129,6 @@ export default function DroneMap() {
     return [37.7749, -122.4194];
   }, [activeDrone, drones, userLocation]);
 
-  // When user location first arrives, fly the map there (unless the user already interacted with the map)
   useEffect(() => {
     if (!userLocation || centeredOnUserRef.current || !mapRef.current) return;
     mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true, duration: 1.2 });
@@ -107,7 +149,7 @@ export default function DroneMap() {
     if (!activeDrone || !mapRef.current) return;
     mapRef.current.flyTo(
       [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
-      Math.max(mapRef.current.getZoom(), 16)
+      Math.max(mapRef.current.getZoom(), 17)
     );
   };
 
@@ -124,6 +166,34 @@ export default function DroneMap() {
     mapRef.current.fitBounds(bounds.pad(0.3), { animate: true });
   };
 
+  // Calculate Mission Planner Target Heading Line (Red Line)
+  const targetHeadingLine = useMemo(() => {
+    if (!activeDrone) return null;
+    const lat = activeDrone.telemetry.latitude;
+    const lon = activeDrone.telemetry.longitude;
+    const hdgRad = (activeDrone.telemetry.heading * Math.PI) / 180;
+
+    // Project 150 meters ahead
+    const distMeters = 150;
+    const latDist = (distMeters / 111139) * Math.cos(hdgRad);
+    const lonDist = (distMeters / (111139 * Math.cos((lat * Math.PI) / 180))) * Math.sin(hdgRad);
+
+    return [
+      [lat, lon],
+      [lat + latDist, lon + lonDist],
+    ];
+  }, [activeDrone]);
+
+  // Direct Line to Current Waypoint (Orange Line)
+  const directWpLine = useMemo(() => {
+    if (!activeDrone || !draftWaypoints.length) return null;
+    const targetWp = draftWaypoints[0];
+    return [
+      [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
+      [targetWp.latitude, targetWp.longitude],
+    ];
+  }, [activeDrone, draftWaypoints]);
+
   return (
     <div data-testid="map-container" className="flex-1 relative bg-[#0a0a0a]">
       <MapContainer
@@ -134,50 +204,79 @@ export default function DroneMap() {
         ref={mapRef}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          key={providerKey}
+          attribution='&copy; Mission Planner Mapping'
+          url={provider.url}
+          maxZoom={provider.maxZoom}
+          subdomains={provider.subdomains}
         />
         <MapClickHandler onClick={handleMapClick} />
-        <FitBounds drones={drones} />
+        <AutoPanHandler activeDrone={activeDrone} autoPan={autoPan} />
 
+        {/* Home positions */}
         {drones.map((d) => (
-          <Marker
-            key={`home-${d.id}`}
-            position={[d.home_lat, d.home_lon]}
-            icon={homeIcon}
-            interactive={false}
-          />
+          <React.Fragment key={`home-group-${d.id}`}>
+            <Circle
+              center={[d.home_lat, d.home_lon]}
+              radius={15}
+              pathOptions={{ color: "#FFB000", weight: 1.5, dashArray: "3,3", fillColor: "#FFB000", fillOpacity: 0.1 }}
+            />
+            <Marker
+              position={[d.home_lat, d.home_lon]}
+              icon={homeIcon}
+              interactive={false}
+            />
+          </React.Fragment>
         ))}
 
+        {/* GPS Track Trail (Black / Purple Line like Mission Planner) */}
         {drones.map((d) => (
           <Polyline
             key={`trail-${d.id}`}
             positions={d.trail || []}
             pathOptions={{
-              color: d.id === activeId ? "#FFB000" : "#00F0FF",
-              weight: 2,
-              opacity: 0.75,
-              dashArray: d.id === activeId ? undefined : "4 4",
+              color: d.id === activeId ? "#800080" : "#00F0FF",
+              weight: 3,
+              opacity: 0.85,
             }}
           />
         ))}
 
+        {/* Target Heading Line (Red Line) */}
+        {targetHeadingLine && (
+          <Polyline
+            positions={targetHeadingLine}
+            pathOptions={{ color: "#FF003C", weight: 2, opacity: 0.9 }}
+          />
+        )}
+
+        {/* Direct to Waypoint Line (Orange Line) */}
+        {directWpLine && (
+          <Polyline
+            positions={directWpLine}
+            pathOptions={{ color: "#FFB000", weight: 2, dashArray: "5,5", opacity: 0.9 }}
+          />
+        )}
+
+        {/* Drone Markers */}
         {drones.map((d) => (
           <Marker
             key={d.id}
             position={[d.telemetry.latitude, d.telemetry.longitude]}
-            icon={droneIcon(d.telemetry.heading, d.id === activeId)}
+            icon={quadcopterIcon(d.telemetry.heading, d.id === activeId, d.telemetry.armed)}
             eventHandlers={{ click: () => setActive(d.id) }}
           />
         ))}
 
+        {/* Draft Mission Polyline */}
         {draftWaypoints.length > 1 && (
           <Polyline
             positions={draftWaypoints.map((w) => [w.latitude, w.longitude])}
-            pathOptions={{ color: "#FFB000", weight: 2, opacity: 0.9 }}
+            pathOptions={{ color: "#00F0FF", weight: 2.5, opacity: 0.9 }}
           />
         )}
 
+        {/* Waypoint Markers */}
         {draftWaypoints.map((wp) => (
           <Marker
             key={wp.seq}
@@ -193,6 +292,7 @@ export default function DroneMap() {
           />
         ))}
 
+        {/* User GPS marker */}
         {userLocation && (
           <>
             <Circle
@@ -205,50 +305,88 @@ export default function DroneMap() {
         )}
       </MapContainer>
 
-      {/* Map overlays */}
-      <div className="absolute top-3 left-3 z-[500] bg-zinc-900 border border-zinc-700 px-3 py-1.5">
+      {/* Top Left Instructions Overlay */}
+      <div className="absolute top-3 left-3 z-[500] bg-zinc-900/90 border border-zinc-700 px-3 py-1.5 backdrop-blur-xs transition-all">
         <div className="font-mono text-[10px] text-zinc-200">
           CLICK MAP TO ADD WAYPOINT (<span className="text-[#FFB000]">{draftWaypoints.length}</span>)
         </div>
       </div>
 
-      <div className="absolute top-3 right-3 z-[500] flex gap-1">
+      {/* Top Right Controls Overlay */}
+      <div className="absolute top-3 right-3 z-[500] flex gap-1 bg-zinc-900/90 border border-zinc-700 p-1 backdrop-blur-xs">
+        {/* Layer Selector */}
+        <select
+          value={providerKey}
+          onChange={(e) => setProviderKey(e.target.value)}
+          className="bg-zinc-800 border border-zinc-700 text-zinc-100 text-[11px] font-mono px-2 h-7 focus:outline-none"
+        >
+          <option value="satellite">Google Satellite</option>
+          <option value="hybrid">Google Hybrid</option>
+          <option value="dark">CartoDB Dark</option>
+          <option value="osm">OpenStreetMap</option>
+        </select>
+
         <button
-          data-testid="btn-map-fit-all"
           onClick={fitAll}
-          className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 px-3 text-[11px] font-mono uppercase"
+          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 h-7 px-2.5 text-[10px] font-mono uppercase"
         >
           Fit All
         </button>
         <button
-          data-testid="btn-map-my-location"
           onClick={centerOnUser}
           disabled={!userLocation}
-          title="Center on my GPS location"
-          className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 w-8 flex items-center justify-center disabled:opacity-40"
+          title="Center on my location"
+          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 h-7 w-7 flex items-center justify-center disabled:opacity-40"
         >
-          <NavIcon className="w-4 h-4 text-[#00F0FF]" />
+          <NavIcon className="w-3.5 h-3.5 text-[#00F0FF]" />
         </button>
         <button
-          data-testid="btn-map-center-active"
           onClick={centerActive}
-          className="bg-zinc-900 border border-zinc-700 text-zinc-100 hover:bg-zinc-800 h-8 w-8 flex items-center justify-center"
+          title="Center on active drone"
+          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 h-7 w-7 flex items-center justify-center"
         >
-          <Crosshair className="w-4 h-4 text-[#FFB000]" />
+          <Crosshair className="w-3.5 h-3.5 text-[#FFB000]" />
         </button>
       </div>
 
-      {activeDrone && (
-        <div className="absolute bottom-3 left-3 z-[500] bg-zinc-900 border border-zinc-700 px-3 py-2 font-mono text-[10px] leading-relaxed">
-          <div className="text-[#FFB000] font-bold">{activeDrone.name}</div>
-          <div className="text-zinc-200">
-            {activeDrone.telemetry.latitude.toFixed(6)}, {activeDrone.telemetry.longitude.toFixed(6)}
-          </div>
-          <div className="text-zinc-300">
-            ALT {activeDrone.telemetry.altitude_relative.toFixed(1)}m · HDG {activeDrone.telemetry.heading.toFixed(0)}° · GS {activeDrone.telemetry.ground_speed.toFixed(1)} m/s
-          </div>
+      {/* Bottom Mission Planner Style Telemetry & Location Bar */}
+      <div className="absolute bottom-0 left-0 right-0 z-[500] bg-black/90 border-t border-zinc-700 px-3 py-1.5 flex flex-wrap items-center justify-between font-mono text-[10px] text-zinc-300 backdrop-blur-xs">
+        <div className="flex items-center gap-4">
+          <span className="text-[#00FF41]">
+            GEO: <span className="text-white font-bold">{activeDrone ? `${activeDrone.telemetry.latitude.toFixed(7)} ${activeDrone.telemetry.longitude.toFixed(7)} ${(activeDrone.telemetry.altitude_relative ?? 0).toFixed(2)}m` : "-- -- --"}</span>
+          </span>
+          <span>hdop: <span className="text-white font-bold">{activeDrone?.telemetry?.hdop != null ? activeDrone.telemetry.hdop.toFixed(1) : "--"}</span></span>
+          <span>Sats: <span className="text-white font-bold">{activeDrone?.telemetry?.satellites != null ? activeDrone.telemetry.satellites : "--"}</span></span>
         </div>
-      )}
+
+        {/* Legend Indicator Lines */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <span className="w-3 h-[2px] bg-[#FF003C]" />
+            <span className="text-zinc-400">Heading</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="w-3 h-[2px]" style={{background:'#FFB000',borderTop:'2px dashed #FFB000'}} />
+            <span className="text-zinc-400">To Waypoint</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="w-3 h-[2px] bg-[#800080]" />
+            <span className="text-zinc-400">GPS Track</span>
+          </div>
+
+          {/* Auto Pan Toggle Button */}
+          <button
+            onClick={() => setAutoPan(!autoPan)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-xs border transition-colors ${autoPan
+              ? "bg-[#00F0FF]/10 border-[#00F0FF] text-[#00F0FF]"
+              : "bg-zinc-800 border-zinc-700 text-zinc-400"
+              }`}
+          >
+            {autoPan ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+            Auto Pan {autoPan ? "ON" : "OFF"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

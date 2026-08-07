@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Iterable, List, Optional
 
 from .db import get_db
-from .drone_worker import DroneWorker
+from .drone_worker import DroneWorker, SimulatorWorker, MavlinkWorker
 from .models import Drone, DroneCreate, Waypoint
 
 logger = logging.getLogger(__name__)
@@ -35,22 +35,33 @@ class DroneManager:
 
     # ---- persistence ---------------------------------------------------
     async def load_saved(self) -> None:
-        db = get_db()
-        docs = await db.drones.find({}, {"_id": 0}).to_list(1000)
-        for doc in docs:
-            try:
-                drone = Drone(**doc)
-                drone.status = "disconnected"
-                worker = DroneWorker(drone, on_update=self._emit)
-                self.workers[drone.id] = worker
-            except Exception:
-                logger.exception("failed to load drone %s", doc.get("id"))
+        try:
+            db = get_db()
+            docs = await db.drones.find({}, {"_id": 0}).to_list(1000)
+            for doc in docs:
+                try:
+                    drone = Drone(**doc)
+                    drone.status = "disconnected"
+                    ct = drone.connection.connection_type
+                    if ct == "simulator":
+                        worker: DroneWorker = SimulatorWorker(drone, on_update=self._emit)
+                    else:
+                        worker = MavlinkWorker(drone, on_update=self._emit)
+                    self.workers[drone.id] = worker
+                except Exception:
+                    logger.exception("failed to load drone %s", doc.get("id"))
+        except Exception as e:
+            logger.warning("MongoDB unavailable for loading saved drones: %s", e)
 
     async def _persist(self, drone: Drone) -> None:
-        db = get_db()
-        doc = drone.model_dump()
-        doc["trail"] = doc["trail"][-200:]
-        await db.drones.update_one({"id": drone.id}, {"$set": doc}, upsert=True)
+        try:
+            db = get_db()
+            doc = drone.model_dump()
+            doc["trail"] = doc["trail"][-200:]
+            await db.drones.update_one({"id": drone.id}, {"$set": doc}, upsert=True)
+        except Exception as e:
+            logger.warning("MongoDB unavailable for persisting drone %s: %s", drone.id, e)
+
 
     # ---- CRUD ----------------------------------------------------------
     async def add_drone(self, payload: DroneCreate) -> Drone:
@@ -64,7 +75,10 @@ class DroneManager:
                 home_lon=payload.home_lon,
                 home_alt=payload.home_alt,
             )
-            worker = DroneWorker(drone, on_update=self._emit)
+            if payload.connection.connection_type == "simulator":
+                worker: DroneWorker = SimulatorWorker(drone, on_update=self._emit)
+            else:
+                worker = MavlinkWorker(drone, on_update=self._emit)
             self.workers[drone.id] = worker
             await self._persist(drone)
             self._emit(drone)
@@ -76,8 +90,11 @@ class DroneManager:
             return
         await worker.disconnect()
         del self.workers[drone_id]
-        db = get_db()
-        await db.drones.delete_one({"id": drone_id})
+        try:
+            db = get_db()
+            await db.drones.delete_one({"id": drone_id})
+        except Exception as e:
+            logger.warning("MongoDB unavailable for remove_drone %s: %s", drone_id, e)
 
     def list_drones(self) -> List[Drone]:
         return [w.drone for w in self.workers.values()]
@@ -112,8 +129,14 @@ class DroneManager:
             worker = self.workers.get(did)
             if not worker:
                 continue
+            # Auto-connect simulator worker if not connected
+            if worker.drone.status != "connected" and isinstance(worker, SimulatorWorker):
+                await worker.connect()
             tasks.append(self._dispatch(worker, command, params))
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors:
+            raise errors[0]
 
     async def _dispatch(self, worker: DroneWorker, command: str, params: dict) -> None:
         cmd = command.lower()
@@ -135,6 +158,8 @@ class DroneManager:
             await worker.rtl()
         elif cmd == "emergency_stop":
             await worker.emergency_stop()
+        elif cmd == "level_horizon":
+            await worker.level_horizon()
         elif cmd == "velocity":
             await worker.set_velocity(
                 float(params.get("forward", 0)),

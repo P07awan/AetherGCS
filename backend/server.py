@@ -127,6 +127,26 @@ async def _shutdown() -> None:
 # ---------------------------------------------------------------------------
 # REST – Drones
 # ---------------------------------------------------------------------------
+@api.get("/system/serial-ports")
+async def get_system_serial_ports():
+    """Detect and return available hardware COM/serial ports on host system."""
+    try:
+        import serial.tools.list_ports
+        ports = serial.tools.list_ports.comports()
+        return [
+            {
+                "port": p.device,
+                "description": p.description,
+                "hwid": p.hwid,
+                "manufacturer": getattr(p, "manufacturer", "") or "",
+            }
+            for p in ports
+        ]
+    except Exception as e:
+        logger.warning("Failed to list serial ports: %s", e)
+        return []
+
+
 @api.get("/")
 async def root():
     return {"service": "gcs", "drones": len(drone_manager.list_drones())}
@@ -163,7 +183,10 @@ async def delete_drone(drone_id: str):
 async def connect_drone(drone_id: str):
     if not drone_manager.get_drone(drone_id):
         raise HTTPException(404, "Drone not found")
-    return await drone_manager.connect(drone_id)
+    drone = await drone_manager.connect(drone_id)
+    if drone.status == "error" and drone.last_error:
+        raise HTTPException(400, f"Connection failed: {drone.last_error}")
+    return drone
 
 
 @api.post("/drones/{drone_id}/disconnect", response_model=Drone)
@@ -192,6 +215,7 @@ async def send_command(req: CommandRequest):
         ))
 
     start = time.time()
+    err_detail = None
     try:
         await drone_manager.send_command(ids, req.command, req.params)
         elapsed = int((time.time() - start) * 1000)
@@ -199,15 +223,19 @@ async def send_command(req: CommandRequest):
             lg.status = "success"
             lg.response_ms = elapsed
     except Exception as e:  # noqa: BLE001
+        err_detail = str(e)
         elapsed = int((time.time() - start) * 1000)
         for lg in logs:
             lg.status = "failed"
-            lg.error = str(e)
+            lg.error = err_detail
             lg.response_ms = elapsed
 
     for lg in logs:
         await command_log.add(lg)
         broadcaster.push("command", lg.model_dump())
+
+    if err_detail:
+        raise HTTPException(400, detail=err_detail)
 
     return {"ok": True, "count": len(logs)}
 
@@ -286,12 +314,15 @@ async def ws_telemetry(ws: WebSocket):
         broadcaster.disconnect(ws)
 
 
+
 app.include_router(api)
 
+_cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+_allow_credentials = _cors_origins != ["*"]  # credentials=True is invalid with wildcard origins
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_credentials=_allow_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

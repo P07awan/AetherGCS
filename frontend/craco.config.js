@@ -134,7 +134,7 @@ if (isDevServer) {
     const { withVisualEdits } = require("@emergentbase/visual-edits/craco");
     webpackConfig = withVisualEdits(webpackConfig);
   } catch (err) {
-    if (err.code === 'MODULE_NOT_FOUND' && err.message.includes('@emergentbase/visual-edits/craco')) {
+    if (err.code === 'MODULE_NOT_FOUND') {
       console.warn(
         "[visual-edits] @emergentbase/visual-edits not installed — visual editing disabled."
       );
