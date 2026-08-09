@@ -89,15 +89,45 @@ function MapClickHandler({ onClick }) {
   return null;
 }
 
+const isValidCoord = (lat, lon) =>
+  lat != null &&
+  lon != null &&
+  !isNaN(lat) &&
+  !isNaN(lon) &&
+  (Math.abs(lat) > 0.0001 || Math.abs(lon) > 0.0001);
+
 function AutoPanHandler({ activeDrone, autoPan }) {
   const map = useMap();
   useEffect(() => {
     if (!autoPan || !activeDrone) return;
-    map.panTo(
-      [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
-      { animate: true, duration: 0.5 }
-    );
-  }, [activeDrone?.telemetry?.latitude, activeDrone?.telemetry?.longitude, autoPan, map, activeDrone]);
+    const lat = activeDrone.telemetry?.latitude;
+    const lon = activeDrone.telemetry?.longitude;
+    const hLat = activeDrone.home_lat;
+    const hLon = activeDrone.home_lon;
+
+    if (isValidCoord(lat, lon)) {
+      map.panTo([lat, lon], { animate: true, duration: 0.5 });
+    } else if (isValidCoord(hLat, hLon)) {
+      map.panTo([hLat, hLon], { animate: true, duration: 0.5 });
+    }
+  }, [
+    activeDrone?.telemetry?.latitude,
+    activeDrone?.telemetry?.longitude,
+    activeDrone?.home_lat,
+    activeDrone?.home_lon,
+    autoPan,
+    map,
+    activeDrone,
+  ]);
+  return null;
+}
+
+function UserInteractionHandler({ onUserDrag }) {
+  useMapEvents({
+    dragstart() {
+      onUserDrag && onUserDrag();
+    },
+  });
   return null;
 }
 
@@ -123,16 +153,30 @@ export default function DroneMap() {
   const provider = MAP_PROVIDERS[providerKey] || MAP_PROVIDERS.satellite;
 
   const center = useMemo(() => {
-    if (activeDrone) return [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude];
-    if (drones[0]) return [drones[0].telemetry.latitude, drones[0].telemetry.longitude];
-    if (userLocation) return [userLocation.lat, userLocation.lon];
-    return [37.7749, -122.4194];
+    if (activeDrone && isValidCoord(activeDrone.telemetry?.latitude, activeDrone.telemetry?.longitude)) {
+      return [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude];
+    }
+    if (activeDrone && isValidCoord(activeDrone.home_lat, activeDrone.home_lon)) {
+      return [activeDrone.home_lat, activeDrone.home_lon];
+    }
+    if (drones[0] && isValidCoord(drones[0].telemetry?.latitude, drones[0].telemetry?.longitude)) {
+      return [drones[0].telemetry.latitude, drones[0].telemetry.longitude];
+    }
+    if (drones[0] && isValidCoord(drones[0].home_lat, drones[0].home_lon)) {
+      return [drones[0].home_lat, drones[0].home_lon];
+    }
+    if (userLocation && isValidCoord(userLocation.lat, userLocation.lon)) {
+      return [userLocation.lat, userLocation.lon];
+    }
+    return [28.6769, 77.5020];
   }, [activeDrone, drones, userLocation]);
 
   useEffect(() => {
     if (!userLocation || centeredOnUserRef.current || !mapRef.current) return;
-    mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true, duration: 1.2 });
-    centeredOnUserRef.current = true;
+    if (isValidCoord(userLocation.lat, userLocation.lon)) {
+      mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true, duration: 1.2 });
+      centeredOnUserRef.current = true;
+    }
   }, [userLocation]);
 
   const handleMapClick = (e) => {
@@ -147,21 +191,36 @@ export default function DroneMap() {
 
   const centerActive = () => {
     if (!activeDrone || !mapRef.current) return;
-    mapRef.current.flyTo(
-      [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
-      Math.max(mapRef.current.getZoom(), 17)
-    );
+    const lat = isValidCoord(activeDrone.telemetry?.latitude, activeDrone.telemetry?.longitude)
+      ? activeDrone.telemetry.latitude
+      : activeDrone.home_lat;
+    const lon = isValidCoord(activeDrone.telemetry?.latitude, activeDrone.telemetry?.longitude)
+      ? activeDrone.telemetry.longitude
+      : activeDrone.home_lon;
+    if (isValidCoord(lat, lon)) {
+      mapRef.current.flyTo([lat, lon], Math.max(mapRef.current.getZoom(), 17));
+    }
   };
 
   const centerOnUser = () => {
     if (!userLocation || !mapRef.current) return;
-    mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true });
+    if (isValidCoord(userLocation.lat, userLocation.lon)) {
+      mapRef.current.flyTo([userLocation.lat, userLocation.lon], 17, { animate: true });
+    }
   };
 
   const fitAll = () => {
     if (!drones.length || !mapRef.current) return;
+    const validDrones = drones.filter((d) =>
+      isValidCoord(d.telemetry?.latitude, d.telemetry?.longitude) || isValidCoord(d.home_lat, d.home_lon)
+    );
+    if (!validDrones.length) return;
     const bounds = L.latLngBounds(
-      drones.map((d) => [d.telemetry.latitude, d.telemetry.longitude])
+      validDrones.map((d) =>
+        isValidCoord(d.telemetry?.latitude, d.telemetry?.longitude)
+          ? [d.telemetry.latitude, d.telemetry.longitude]
+          : [d.home_lat, d.home_lon]
+      )
     );
     mapRef.current.fitBounds(bounds.pad(0.3), { animate: true });
   };
@@ -201,6 +260,9 @@ export default function DroneMap() {
         zoom={17}
         className="w-full h-full"
         zoomControl={true}
+        dragging={true}
+        doubleClickZoom={true}
+        scrollWheelZoom={true}
         ref={mapRef}
       >
         <TileLayer
@@ -211,6 +273,7 @@ export default function DroneMap() {
           subdomains={provider.subdomains}
         />
         <MapClickHandler onClick={handleMapClick} />
+        <UserInteractionHandler onUserDrag={() => setAutoPan(false)} />
         <AutoPanHandler activeDrone={activeDrone} autoPan={autoPan} />
 
         {/* Home positions */}
