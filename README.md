@@ -73,12 +73,14 @@ The UI is a premium dark-mode dashboard with live telemetry, an interactive map,
 - Mission library with save / load / duplicate / delete / import / export JSON
 - Upload mission to single or multiple drones simultaneously
 
-### Map
-- Leaflet-based interactive map with satellite and street tile layers
-- Live drone position markers with real-time heading vectors
+### Map & Deep Zoom
+- **Mission Planner Aerial Maps** — Google Hybrid, Google Satellite, Esri World Imagery (HD), Google Streets, CartoDB Dark, and OpenStreetMap
+- **Ultra-Deep Zooming (Level 23)** — enables sub-meter resolution for precise waypoint placement and alignment around buildings, fields, and structures
+- **Quick Precision Zoom (21x)** — 1-click shortcut button to instantly zoom right in to 21x magnification on active drone or mission
+- Live drone position markers with real-time heading vectors & target direction vectors
 - Color-coded flight path trails (up to 500 points per drone)
-- Waypoint markers with sequence numbers
-- RTL home position marker
+- Draggable waypoint markers with sequence numbers
+- Real-time zoom level indicator (`ZOOM: 21x (PRECISE)`) and map status readout
 - One-click "fly here" by clicking the map
 
 ### Primary Flight Display (HUD)
