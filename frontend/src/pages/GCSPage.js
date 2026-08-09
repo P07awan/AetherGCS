@@ -12,6 +12,7 @@ import TelemetryPanel from "@/components/TelemetryPanel";
 import DroneMap from "@/components/DroneMap";
 import MissionPlanner from "@/components/MissionPlanner";
 import CommandHistory from "@/components/CommandHistory";
+import ManualControl from "@/components/ManualControl";
 import StatusBar from "@/components/StatusBar";
 import { useResizable } from "@/hooks/useResizable";
 import { ResizeHandle } from "@/components/ResizeHandle";
@@ -130,12 +131,22 @@ export default function GCSPage() {
                 >
                   Command Log
                 </TabsTrigger>
+                <TabsTrigger
+                  data-testid="tab-manual"
+                  value="manual"
+                  className="rounded-none data-[state=active]:bg-zinc-950 data-[state=active]:text-[#00FF41] data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-[#00FF41] text-[11px] font-mono uppercase tracking-wider text-zinc-300"
+                >
+                  Manual Control
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="mission" className="flex-1 mt-0 overflow-hidden">
                 <MissionPlanner />
               </TabsContent>
               <TabsContent value="history" className="flex-1 mt-0 overflow-hidden">
                 <CommandHistory />
+              </TabsContent>
+              <TabsContent value="manual" className="flex-1 mt-0 overflow-hidden bg-zinc-900">
+                <ManualControl />
               </TabsContent>
             </Tabs>
           </div>

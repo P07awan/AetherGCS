@@ -66,6 +66,14 @@ The UI is a premium dark-mode dashboard with live telemetry, an interactive map,
 | `clear_mission` | MISSION_CLEAR_ALL |
 | `level_horizon` | MAV_CMD_PREFLIGHT_CALIBRATION (accelerometer level) |
 
+### Manual Control (Virtual Joysticks)
+AETHER GCS features a built-in virtual joystick interface for manual flight control, allowing you to fly the drone directly from the dashboard:
+- Dual on-screen joysticks mimicking a Mode 2 RC transmitter.
+- **Left Stick:** Controls Altitude (Up/Down) and Yaw rotation (Left/Right).
+- **Right Stick:** Controls Pitch (Forward/Backward) and Roll (Left/Right).
+- Configurable maximum velocity limits for XY (horizontal) and Z (vertical) speeds in m/s.
+- Instant stop and hold position when sticks are released.
+
 ### Mission Planner
 - Click-to-place waypoints on map
 - Waypoint table with lat/lon/altitude/action/hold editing
