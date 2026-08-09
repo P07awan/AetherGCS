@@ -275,7 +275,7 @@ export default function AddDroneDialog({ open, onOpenChange }) {
                                      className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="bg-zinc-900 border-zinc-700 text-zinc-100">
+                      <SelectContent position="popper" side="bottom" sideOffset={4} className="bg-zinc-900 border-zinc-700 text-zinc-100">
                         {BAUD_RATES.map((b) => (
                           <SelectItem key={b} value={String(b)} className="font-mono text-xs">{b}</SelectItem>
                         ))}
