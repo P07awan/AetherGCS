@@ -28,12 +28,18 @@ const Section = ({ title, icon: Icon, children }) => (
   </div>
 );
 
-export default function TelemetryPanel() {
+import React, { forwardRef } from "react";
+
+const TelemetryPanel = forwardRef(({ style, className = "" }, ref) => {
   const d = useActiveDrone();
 
   if (!d) {
     return (
-      <div className="w-80 shrink-0 border-l border-zinc-800 bg-zinc-950 flex items-center justify-center text-zinc-600 text-sm">
+      <div 
+        ref={ref}
+        className={`w-80 shrink-0 border-l border-zinc-800 bg-zinc-950 flex items-center justify-center text-zinc-600 text-sm ${className}`}
+        style={style}
+      >
         <div className="text-center px-6">
           <Activity className="w-10 h-10 mx-auto mb-3 opacity-30" />
           Select a drone to view telemetry.
@@ -49,8 +55,10 @@ export default function TelemetryPanel() {
 
   return (
     <div
+      ref={ref}
       data-testid="telemetry-panel"
-      className="w-80 shrink-0 border-l border-zinc-700 bg-zinc-900 flex flex-col overflow-hidden"
+      className={`w-80 shrink-0 border-l border-zinc-700 bg-zinc-900 flex flex-col overflow-hidden ${className}`}
+      style={style}
     >
       <div className="h-10 px-3 flex items-center justify-between border-b border-zinc-700 bg-zinc-800/60">
         <div className="flex items-center gap-2">
@@ -151,4 +159,6 @@ export default function TelemetryPanel() {
       </div>
     </div>
   );
-}
+});
+
+export default TelemetryPanel;

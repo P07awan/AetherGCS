@@ -4,7 +4,9 @@ import { Plane, Battery, Wifi, WifiOff, SlidersHorizontal, ChevronDown, ChevronU
 import { Button } from "@/components/ui/button";
 import MissionPlannerHUD from "@/components/MissionPlannerHUD";
 
-export default function DroneListSidebar() {
+import React, { forwardRef } from "react";
+
+const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
   const drones = useDroneList();
   const selectedIds = useGCS((s) => s.selectedDroneIds);
   const activeId = useGCS((s) => s.activeDroneId);
@@ -17,8 +19,10 @@ export default function DroneListSidebar() {
 
   return (
     <div
+      ref={ref}
       data-testid="drone-list-sidebar"
-      className="w-72 shrink-0 border-r border-zinc-700 bg-zinc-900 flex flex-col"
+      className={`w-72 shrink-0 border-r border-zinc-700 bg-zinc-900 flex flex-col overflow-hidden ${className}`}
+      style={style}
     >
       <div className="h-10 px-3 flex items-center justify-between border-b border-zinc-700 bg-zinc-800/60">
         <span className="font-display font-black text-[11px] tracking-widest text-zinc-200">
@@ -172,4 +176,6 @@ export default function DroneListSidebar() {
       </div>
     </div>
   );
-}
+});
+
+export default DroneListSidebar;

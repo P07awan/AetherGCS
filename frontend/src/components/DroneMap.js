@@ -131,6 +131,18 @@ function UserInteractionHandler({ onUserDrag }) {
   return null;
 }
 
+function MapResizeInvalidator() {
+  const map = useMap();
+  useEffect(() => {
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    observer.observe(map.getContainer());
+    return () => observer.disconnect();
+  }, [map]);
+  return null;
+}
+
 import MissionPlannerHUD from "@/components/MissionPlannerHUD";
 
 export default function DroneMap() {
@@ -275,6 +287,7 @@ export default function DroneMap() {
         <MapClickHandler onClick={handleMapClick} />
         <UserInteractionHandler onUserDrag={() => setAutoPan(false)} />
         <AutoPanHandler activeDrone={activeDrone} autoPan={autoPan} />
+        <MapResizeInvalidator />
 
         {/* Home positions */}
         {drones.map((d) => (
