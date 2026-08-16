@@ -1,6 +1,6 @@
 # AETHER GCS - User Guide & Operations Manual
 
-Welcome to **AETHER GCS**, your advanced multi-drone Ground Control Station. This guide explains how to navigate the user interface, manage your fleet, execute basic flight commands, and plan automated missions.
+Welcome to **AETHER GCS**, your advanced multi-drone Ground Control Station. This guide explains how to navigate the user interface, manage your fleet, execute basic flight commands, switch flight modes, and plan automated missions.
 
 ---
 
@@ -8,8 +8,8 @@ Welcome to **AETHER GCS**, your advanced multi-drone Ground Control Station. Thi
 
 The AETHER GCS interface is built entirely around maximizing situational awareness and giving you absolute control over your fleet. The layout is highly customizable.
 
-- **Top Toolbar**: Your primary command center for executing actions like Connect, Arm, Takeoff, RTL, and uploading missions.
-- **Left Panel (Fleet Status)**: Lists all your configured drones. Shows connection status, active modes, and allows you to select single or multiple drones. 
+- **Top Toolbar**: Your primary command center for executing actions like Connect, Arm, Takeoff, Flight Mode Selection (LOITER, GUIDED, AUTO, STABILIZE, LAND, RTL), Land, Hold, RTL, and uploading missions.
+- **Left Panel (Fleet Status)**: Lists all your configured drones. Shows connection status, active modes, level horizon toggle, and allows you to select single or multiple drones. 
 - **Center Panel (Map & Mission Planner)**: 
   - **The Map** tracks real-time GPS locations of all connected drones and displays your drawn mission paths.
   - **Mission Planner (Bottom)** allows you to draw paths, create survey grids, and inspect the command log.
@@ -33,28 +33,104 @@ The AETHER GCS interface is built entirely around maximizing situational awarene
 4. Select the drone in the Fleet List (Left Panel).
 5. Click **Connect (Power Icon)** in the Top Toolbar. The status indicator will turn green once a heartbeat is established.
 
-### Selecting Drones for Commands
-AETHER GCS supports swarming and multi-drone commands. 
-- Click on any drone in the left panel to select it.
-- Hold `Ctrl` (or `Cmd`) while clicking to select multiple drones.
-- Click the **[ ]** (Select All) button to issue commands to the entire fleet simultaneously.
-- Any flight command issued from the Top Toolbar will be sent to **ALL** currently selected drones.
+### Selecting Drones: Individual vs Swarm Operations
+AETHER GCS supports both **individual drone control** and **multi-drone swarm operations**:
+
+#### 1. Individual Drone Mode (Separate Waypoints per Drone)
+When you want **Drone 1** and **Drone 2** to fly different waypoint paths:
+1. Click **`NONE`** in the top right of the Fleet panel to ensure no swarm checkboxes are selected.
+2. Click on **Drone 1** in the Fleet list. Notice the Mission Planner header shows **`DRONE: Drone 1`**.
+3. Draw waypoints on the map for Drone 1 and click **`Upload`** (transmits mission to Drone 1).
+4. Click **`Clear`** in the Mission Planner tab.
+5. Click on **Drone 2** in the Fleet list. Notice the Mission Planner header updates to **`DRONE: Drone 2`**.
+6. Draw the unique waypoints for Drone 2 and click **`Upload`** (transmits mission to Drone 2).
+
+#### 2. Swarm Batch Mode (Same Mission to Multiple Drones)
+When you want multiple drones to execute the same flight path simultaneously:
+1. Check the checkboxes next to the drones (or click **`ALL`** in the Fleet panel header).
+2. Notice the Mission Planner header displays **`SWARM: X DRONES`**.
+3. Click **`Upload`** → transmits the mission to all selected drones in a single batch.
 
 ---
 
 ## 3. Basic Flight Controls
 
-Once your drones are connected and have a valid GPS lock, you can command them using the Top Toolbar.
+> [!IMPORTANT]
+> **Normal Flight Workflow — Each step is independent and must be explicitly user-triggered:**
+> ```
+> CONNECT → ARM → TAKEOFF → MODE SELECT / HOLD / MISSION → LAND → DISARM
+> ```
 
-1. **Arm (Blue Radio Icon)**: Arms the motors. *Warning: Propellers will spin.*
-2. **Takeoff (Yellow Up Arrow)**: Commands the drone to takeoff to a default altitude (20m). 
-3. **Hold (Hand Icon)**: Instantly pauses the drone's current movement and commands it to loiter/hover in place.
-4. **Land (Down Arrow)**: Commands the drone to descend and land at its current GPS location.
-5. **RTL (Home Icon)**: Return To Launch. The drone will ascend to a safe altitude and return to its original takeoff location.
-6. **Disarm (White Radio Icon)**: Disarms the motors. *Only use this when the drone is safely on the ground, or in an extreme emergency.*
+Once your drones are connected and have a valid GPS lock, command them using the Top Toolbar buttons in order:
+
+### Step 1 — ARM
+
+Click **Arm (Green Radio Icon)** to arm the motors.
+
+- The GCS sends a `MAV_CMD_COMPONENT_ARM_DISARM` command and waits for the flight controller's `COMMAND_ACK`.
+- If the flight controller **accepts** the command, the heartbeat armed flag is verified and the UI shows `ARMED`.
+- If the flight controller **rejects** the command (e.g. GPS/EKF/pre-arm check failure), the exact reason is shown:
+  ```
+  ARM FAILED: Command 400 rejected — PreArm: Need 3D Fix
+  ```
+- The ARM button is automatically disabled once the drone is armed.
 
 > [!WARNING]
-> **Emergency Kills:** Disarming while a drone is in the air will cause it to drop out of the sky. Always use **Hold** or **RTL** for mid-air aborts.
+> **Propellers will spin immediately when armed.** Keep clear of the drone.
+
+### Step 2 — Set Takeoff Altitude
+
+Before clicking Takeoff, set your target altitude using the **altitude picker** (the `± / number input` widget next to the Takeoff button).
+
+- Range: **1m – 120m** (GCS safety maximum).
+- Default: **10m**.
+
+### Step 3 — TAKEOFF
+
+Click **Takeoff (Yellow Up Arrow)** to climb to the selected altitude.
+
+- The drone **must be armed** before clicking Takeoff. If not, you will see:
+  ```
+  TAKEOFF BLOCKED — Drone is not armed. Click ARM first.
+  ```
+- The GCS sends `MAV_CMD_NAV_TAKEOFF` with your selected altitude and waits for `COMMAND_ACK`.
+- After the command is accepted, the UI state shows `TAKING OFF`.
+- When the drone reaches the target altitude, it automatically transitions to `AIRBORNE` state in `LOITER` mode.
+- **The drone will never automatically land after reaching the target altitude.**
+
+### Step 4 — Flight Mode Selector & Hold
+
+- **Flight Mode Dropdown**: Click the mode pill (e.g. `● LOITER`) in the Top Toolbar to pick any flight mode directly:
+  - **Manual**: `STABILIZE`, `ALT_HOLD`, `POSHOLD`
+  - **GCS Commanded**: `GUIDED`, `LOITER`
+  - **Autonomous**: `AUTO`
+  - **Navigation**: `LAND`, `RTL`
+- **Hold (Hand Icon)**: Instantly switches the drone to `LOITER` mode to hover in place.
+- **Manual Control**: Select the Manual Control tab at the bottom to fly using virtual joysticks.
+- **Mission**: Upload and start an autonomous waypoint mission (see Section 5).
+
+### Step 5 — LAND
+
+Click **Land (Down Arrow)** to descend and land at the current GPS location.
+
+- The LAND button is enabled whenever the drone is armed and airborne.
+- LAND is completely independent — it is **never called automatically** by any other button.
+- The drone descends to the ground and disarms automatically per flight controller settings (`LANDING` → `DISARMED`).
+
+### Step 6 — DISARM
+
+Click **Disarm (White Radio Icon)** after landing to confirm the motors are disarmed.
+
+- The GCS verifies the heartbeat armed flag is `false` after sending the command.
+- If the drone auto-disarms upon touchdown, the GCS automatically catches the update and shows `DISARMED`.
+
+> [!WARNING]
+> **Disarming in the air will cause the drone to fall.** Always land first, then disarm.
+
+> [!NOTE]
+> **Mission Note:** Uploading a mission does NOT automatically arm or start flight. After uploading, you must:
+> 1. Click **ARM** → drone arms
+> 2. Click **Start Mission** → mission begins (switches to `AUTO`)
 
 ---
 
@@ -70,7 +146,7 @@ The **Right Panel** will populate with real-time data streams:
 
 > [!NOTE]
 > **Artificial Horizon (Level Card):**
-> You can click the **Level (Yellow Sliders)** button in the Top Toolbar to pop open an artificial horizon card directly in the Left Sidebar to visualize the drone's physical tilt in real-time.
+> You can toggle the artificial horizon card directly in the Left Sidebar (Fleet status header) to visualize the drone's physical tilt in real-time.
 
 ---
 
@@ -109,5 +185,7 @@ If you prefer to fly the drone manually (similar to a Mode 2 RC Transmitter), AE
 5. Click and drag the sticks. The moment you release your mouse, the sticks snap back to the center and the drone is commanded to immediately stop and hold position.
 
 ---
+
+> **Looking to test before flying real hardware?** See the complete **[Manual Testing Guide](MANUAL_TESTING_GUIDE.md)** for a 12-step verification walkthrough using the built-in simulator.
 
 *Fly safely and always adhere to local aviation regulations when using AETHER GCS outdoors.*

@@ -19,6 +19,22 @@ FlightMode = Literal[
 ]
 DroneStatus = Literal["disconnected", "connecting", "connected", "error"]
 
+# Explicit flight state machine — updated by drone workers, consumed by frontend
+FlightState = Literal[
+    "DISCONNECTED",      # no MAVLink link
+    "CONNECTED",         # link up, waiting for heartbeat / pre-arm
+    "DISARMED",          # heartbeat received, armed=False
+    "ARMING",            # ARM command sent, waiting for ACK + heartbeat confirmation
+    "ARMED",             # heartbeat confirms armed=True, on ground
+    "TAKEOFF_REQUESTED", # TAKEOFF command sent, waiting for ACK
+    "TAKING_OFF",        # climbing toward target altitude
+    "AIRBORNE",          # at or above target altitude, holding
+    "LANDING",           # LAND command sent / descending
+    "LANDED",            # on ground after landing (may still be armed briefly)
+    "MISSION_READY",     # mission uploaded, armed, ready to start
+    "MISSION_ACTIVE",    # AUTO mode, mission running
+]
+
 
 class ConnectionProfile(BaseModel):
     connection_type: ConnectionType = "simulator"
@@ -41,11 +57,13 @@ class DroneCreate(BaseModel):
 class Telemetry(BaseModel):
     armed: bool = False
     flight_mode: FlightMode = "STABILIZE"
+    flight_state: FlightState = "DISCONNECTED"  # explicit state machine
     # Optional for real drones — None means MAVLink hasn't sent data yet
     battery_percent: Optional[float] = None   # 0-100 or None (unknown)
     battery_voltage: Optional[float] = None   # V or None
     battery_current: Optional[float] = None   # A or None
     gps_fix: Optional[int] = None             # 0=no fix, 2=2D, 3=3D, None=unknown
+    ekf_ok: Optional[bool] = None             # True if EKF is healthy
     satellites: Optional[int] = None          # count or None
     hdop: Optional[float] = None              # horizontal dilution of precision (e.g. 1.2)
     latitude: float = 0.0

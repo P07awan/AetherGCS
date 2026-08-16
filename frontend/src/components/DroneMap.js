@@ -259,8 +259,15 @@ export default function DroneMap() {
   const directWpLine = useMemo(() => {
     if (!activeDrone || !draftWaypoints.length) return null;
     const targetWp = draftWaypoints[0];
+    const lat = isValidCoord(activeDrone.telemetry?.latitude, activeDrone.telemetry?.longitude)
+      ? activeDrone.telemetry.latitude
+      : activeDrone.home_lat;
+    const lon = isValidCoord(activeDrone.telemetry?.latitude, activeDrone.telemetry?.longitude)
+      ? activeDrone.telemetry.longitude
+      : activeDrone.home_lon;
+    if (!isValidCoord(lat, lon)) return null;
     return [
-      [activeDrone.telemetry.latitude, activeDrone.telemetry.longitude],
+      [lat, lon],
       [targetWp.latitude, targetWp.longitude],
     ];
   }, [activeDrone, draftWaypoints]);

@@ -1,4 +1,4 @@
-<![CDATA[<div align="center">
+<div align="center">
 
 # ✈️ AetherGCS
 
@@ -10,7 +10,7 @@
 [![MAVLink](https://img.shields.io/badge/MAVLink-v2-FF6600?style=flat)](https://mavlink.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-*Real-time telemetry · Multi-drone fleet management · Mission planning · Built-in simulator*
+*Real-time telemetry · Multi-drone fleet management · Mission planning · Flight mode selector · Built-in simulator*
 
 </div>
 
@@ -20,7 +20,7 @@
 
 AetherGCS is a full-stack Ground Control Station application for managing autonomous drone fleets. It supports real hardware connections via **MAVLink** (ArduPilot / PX4) over Serial, UDP, or TCP, as well as a **built-in physics-lite simulator** requiring no external hardware.
 
-The UI is a premium dark-mode dashboard with live telemetry, an interactive map, a mission planner with waypoint editing, a Primary Flight Display (PFD/HUD), and a command log — all updating at **10 Hz** over WebSocket.
+The UI is a premium dark-mode dashboard with live telemetry, an interactive map, a mission planner with waypoint editing, an integrated Flight Mode Selector dropdown, a Primary Flight Display (PFD/HUD), and a command log — all updating at **10 Hz** over WebSocket.
 
 ---
 
@@ -31,13 +31,14 @@ The UI is a premium dark-mode dashboard with live telemetry, an interactive map,
 - Connection types: **Serial/USB**, **UDP**, **TCP**, **Built-in Simulator**
 - Auto-reconnect on connection drop with configurable retry logic
 - Per-drone status indicators: `connecting` / `connected` / `error` / `disconnected`
+- Canonical telemetry state machine (`DISARMED`, `ARMING`, `ARMED`, `TAKING_OFF`, `AIRBORNE`, `LANDING`, `MISSION_ACTIVE`)
 - Persistent drone registry via **MongoDB** (gracefully falls back to in-memory if unavailable)
 
 ### Live Telemetry (10 Hz)
 
 | Category | Metrics |
 |---|---|
-| Flight State | Armed/Disarmed, Flight Mode, Firmware, Heartbeat |
+| Flight State | Armed/Disarmed, Flight State, Flight Mode, Firmware, Heartbeat |
 | Position | Latitude, Longitude, Altitude MSL, Altitude Relative, Flight Trail |
 | GNSS | GPS Fix Type, Satellite Count, HDOP |
 | Attitude | Pitch, Roll, Heading/Yaw |
@@ -45,18 +46,17 @@ The UI is a premium dark-mode dashboard with live telemetry, an interactive map,
 | Battery | Voltage, Current, State of Charge % |
 | Status | STATUSTEXT messages from flight controller |
 
-### Flight Commands
+### Flight Commands & Mode Selector
 
 | Command | Description |
 |---|---|
-| `arm` / `disarm` | Motor arm/disarm |
-| `takeoff` | Set GUIDED mode → arm → NAV_TAKEOFF |
-| `land` | MAV_CMD_NAV_LAND |
-| `rtl` | Return to Launch |
-| `hold` | LOITER mode |
+| `arm` / `disarm` | Motor arm/disarm (with COMMAND_ACK verification & reason display) |
+| `takeoff` | GUIDED takeoff with altitude picker (1m – 120m) |
+| `land` | Descend & land vertically at current position |
+| `rtl` | Return to Launch & land |
+| `hold` | Switch to LOITER mode to hover in place |
+| `set_mode` | Switch flight mode (`STABILIZE`, `ALT_HOLD`, `POSHOLD`, `GUIDED`, `LOITER`, `AUTO`, `LAND`, `RTL`) |
 | `emergency_stop` | Force-disarm in flight (safety override) |
-| `set_mode` | Change flight mode |
-| `goto` | Fly to GPS coordinate |
 | `set_velocity` | Body-frame velocity (forward/right/up + yaw rate) |
 | `upload_mission` | Upload waypoint list via MAVLink Mission Protocol |
 | `start_mission` | Switch to AUTO + MAV_CMD_MISSION_START |
@@ -145,6 +145,8 @@ AETHER GCS features a built-in virtual joystick interface for manual flight cont
 
 ```
 AetherGCS/
+├── FLIGHT_MODES.md             # Complete Flight Mode switching guide
+├── USER_GUIDE.md               # Operational User Guide
 ├── backend/
 │   ├── server.py               # FastAPI app — REST API + WebSocket broadcaster
 │   ├── requirements.txt        # Python dependencies
@@ -166,7 +168,7 @@ AetherGCS/
     │   │   └── useUserGeolocation.js # Browser GPS → store
     │   └── components/
     │       ├── DroneListSidebar.js      # Fleet panel + level select
-    │       ├── TopToolbar.js            # Command buttons (Arm, Takeoff, etc.)
+    │       ├── TopToolbar.js            # Command buttons + Flight Mode Selector
     │       ├── DroneMap.js              # Leaflet map + markers + trails
     │       ├── MissionPlanner.js        # Waypoint table + upload/start/pause
     │       ├── MissionPlannerHUD.js     # Primary Flight Display (HUD)
@@ -188,10 +190,8 @@ AetherGCS/
 |------|----------------|-------|
 | Python | 3.11+ | Backend runtime |
 | Node.js | 18+ | Frontend build |
-| Yarn | 1.22+ | Package manager (`npm install -g yarn`) |
+| Yarn / NPM | 1.22+ / 9+ | Package manager |
 | MongoDB | 6.0+ | **Optional** — falls back to in-memory |
-
-> **MongoDB is optional.** AetherGCS works fully without it; drones and missions will not persist across server restarts.
 
 ---
 
@@ -242,7 +242,7 @@ uvicorn server:app --reload
 
 ```bash
 cd frontend
-yarn install
+npm install
 ```
 
 Create `frontend/.env`:
@@ -256,7 +256,7 @@ ENABLE_HEALTH_CHECK=false
 Start the frontend dev server:
 
 ```bash
-yarn start
+npm start
 # App opens at http://localhost:3000
 ```
 
@@ -269,8 +269,8 @@ yarn start
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MONGO_URL` | `mongodb://localhost:27017` | MongoDB connection string |
-| `DB_NAME` | `test_database` | MongoDB database name |
-| `CORS_ORIGINS` | `*` | Allowed origins (comma-separated). Set to your frontend URL in production, e.g. `http://localhost:3000`. Wildcard `*` disables cookie/credential sharing per CORS spec. |
+| `DB_NAME` | `aethergcs` | MongoDB database name |
+| `CORS_ORIGINS` | `*` | Allowed origins (comma-separated). Set to your frontend URL in production, e.g. `http://localhost:3000`. |
 
 ### Frontend (`frontend/.env`)
 
@@ -310,175 +310,21 @@ Full interactive docs: `http://localhost:8000/docs`
 ```json
 {
   "drone_ids": ["<uuid>"],
-  "command": "takeoff",
-  "params": { "altitude": 20.0 }
+  "command": "set_mode",
+  "params": { "mode": "LOITER" }
 }
 ```
 
-### Missions
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/missions` | List all saved missions |
-| `POST` | `/missions` | Create a new mission |
-| `GET` | `/missions/{id}` | Get a mission by ID |
-| `PUT` | `/missions/{id}` | Update a mission |
-| `DELETE` | `/missions/{id}` | Delete a mission |
-| `POST` | `/missions/{id}/duplicate` | Duplicate a mission |
-
-### System
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/system/serial-ports` | List available serial/COM ports on the host |
-
-### WebSocket
-
-```
-ws://localhost:8000/api/ws/telemetry
-```
-
-The server pushes JSON events at up to **10 Hz**:
-
-| Event `type` | Payload | Description |
-|------------|---------|-------------|
-| `snapshot` | `Drone[]` | Full fleet state on initial connect |
-| `drone` | `Drone` | Single drone state update (telemetry / status change) |
-| `drone_removed` | `{ "id": "..." }` | Drone was deleted from fleet |
-| `command_log` | `CommandLog` | A command was executed |
-
 ---
 
-## Connecting a Real Drone
+## Documentation Links
 
-### Serial / USB (Pixhawk, APM, SiK Telemetry Radio)
-
-1. Click **+ Add Drone** in the top toolbar
-2. Select the **Serial (USB/Radio)** tab
-3. Click **Scan Ports** — detected system COM ports are listed automatically
-4. Select your port and baud rate:
-   | Hardware | Baud Rate |
-   |----------|-----------|
-   | Pixhawk native USB | 115200 |
-   | APM/Pixhawk USB | 57600 |
-   | SiK Telemetry Radio | 57600 |
-5. Set drone name and home position, then click **Connect Drone**
-
-### UDP (SITL, Mission Planner forwarding)
-
-```
-Host: 127.0.0.1    Port: 14550
-```
-
-### TCP (SITL)
-
-```
-Host: 127.0.0.1    Port: 5760
-```
-
-### Built-in Simulator
-
-Select the **Simulator** tab — no hardware required. The drone spawns at the configured home coordinates and responds to all flight commands with realistic physics.
-
----
-
-## Mission Planner Usage
-
-1. **Add waypoints** — click the map (in *Add WP* mode from toolbar) or press **+ WP** in the Mission Planner panel
-2. **Edit waypoints** — modify latitude, longitude, altitude, action type, and hold time directly in the table
-3. **Generate a survey grid** — click the grid icon and configure area dimensions (width × length), lane spacing, and grid rotation angle for automated mapping missions
-4. **Upload** — click **Upload** to send the mission to selected drone(s) via the MAVLink Mission Protocol
-5. **Execute** — click **Start** to switch the drone to AUTO mode
-6. **Save/load** — missions are persisted to MongoDB and can be exported as `.mission.json` files
-
----
-
-## MAVLink Messages Decoded
-
-| MAVLink Message | Telemetry Fields Populated |
-|----------------|---------------------------|
-| `HEARTBEAT` | `armed`, `flight_mode`, `firmware`, `heartbeat` |
-| `GLOBAL_POSITION_INT` | `latitude`, `longitude`, `altitude_msl`, `altitude_relative` ★ |
-| `GPS_RAW_INT` | `gps_fix`, `satellites`, `hdop` |
-| `GPS2_RAW` | `satellites` (fallback), `gps_fix` (fallback) |
-| `VFR_HUD` | `ground_speed`, `air_speed`, `heading`, `altitude_msl` |
-| `ATTITUDE` | `pitch`, `roll`, `heading` |
-| `BATTERY_STATUS` | `battery_voltage`, `battery_current`, `battery_percent` |
-| `SYS_STATUS` | `battery_voltage` (fallback) |
-| `HOME_POSITION` | `home_lat`, `home_lon`, `home_alt` |
-| `STATUSTEXT` | Status messages in command log |
-
-> ★ **Altitude note:** `altitude_relative` comes exclusively from `GLOBAL_POSITION_INT.relative_alt` — the autopilot's own home-referenced altitude. It reads **0 m at the home/arm position**, increases as the drone ascends, and decreases on descent. It is never overridden by MSL calculations.
-
----
-
-## Development
-
-### Backend tests
-
-```bash
-cd backend
-pytest
-```
-
-### Backend code quality
-
-```bash
-black .          # Format
-isort .          # Import order
-flake8 .         # Lint
-mypy .           # Type check
-```
-
-### Production build (frontend)
-
-```bash
-cd frontend
-yarn build
-```
-
----
-
-## Technology Stack
-
-### Backend
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| **FastAPI** | 0.110 | REST API + WebSocket server |
-| **uvicorn** | 0.25 | ASGI runtime |
-| **pymavlink** | ≥2.4.40 | MAVLink v2 protocol (Serial/UDP/TCP) |
-| **pyserial** | ≥3.5 | Serial port enumeration |
-| **motor** | 3.3 | Async MongoDB driver |
-| **pydantic** | ≥2.6 | Data validation + models |
-| **python-dotenv** | ≥1.0 | Environment config loading |
-
-### Frontend
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| **React** | 19.0 | UI framework |
-| **Zustand** | ≥5.0 | Global state management |
-| **Leaflet + react-leaflet** | 1.9 / 5.0 | Interactive drone map |
-| **Axios** | 1.18 | REST API HTTP client |
-| **Framer Motion** | 11.18 | UI animations |
-| **Radix UI** | Various | Accessible UI primitives |
-| **Tailwind CSS** | 3.4 | Utility-first styling |
-| **Recharts** | 3.6 | Data visualization |
-| **Sonner** | 2.0 | Toast notifications |
-| **Lucide React** | 0.516 | Icon set |
+- **[Operational User Guide](USER_GUIDE.md)**: Detailed step-by-step instructions for operating the GCS.
+- **[Flight Modes Guide](FLIGHT_MODES.md)**: Comprehensive reference for STABILIZE, GUIDED, LOITER, AUTO, LAND, and RTL flight modes.
+- **[Manual Testing Guide](MANUAL_TESTING_GUIDE.md)**: Complete step-by-step testing guide using the simulator and SITL before flying real hardware.
 
 ---
 
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<div align="center">
-
-Built for drone operators who need reliability, speed, and control.
-
-</div>
-]]>

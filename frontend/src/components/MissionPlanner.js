@@ -105,6 +105,16 @@ export default function MissionPlanner() {
     reorderWaypoints(list);
   };
 
+  const drones = useGCS((s) => s.drones);
+  const primaryDrone = selected.length === 0 && activeId ? drones[activeId] : null;
+  const targetText = selected.length > 1
+    ? `SWARM: ${selected.length} DRONES`
+    : selected.length === 1
+    ? `DRONE: ${selected[0].name}`
+    : primaryDrone
+    ? `DRONE: ${primaryDrone.name}`
+    : "NO DRONE SELECTED";
+
   return (
     <div data-testid="mission-planner" className="h-full flex flex-col bg-zinc-950">
       <div className="h-10 px-3 border-b border-zinc-700 bg-zinc-900 flex items-center gap-2">
@@ -112,9 +122,18 @@ export default function MissionPlanner() {
         <span className="font-display font-black text-[11px] tracking-widest text-zinc-100">
           MISSION PLANNER
         </span>
+        <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase border ${
+          selected.length > 1
+            ? "bg-amber-950/60 border-amber-500 text-amber-300"
+            : (selected.length === 1 || primaryDrone)
+            ? "bg-cyan-950/60 border-cyan-500 text-cyan-300"
+            : "bg-zinc-800 border-zinc-700 text-zinc-500"
+        }`}>
+          {targetText}
+        </span>
         <input
           data-testid="input-mission-name"
-          className="ml-3 bg-zinc-900 border border-zinc-800 h-6 px-2 text-xs w-48 focus:outline-none focus:border-[#FFB000] rounded-sm text-zinc-100"
+          className="ml-2 bg-zinc-900 border border-zinc-800 h-6 px-2 text-xs w-44 focus:outline-none focus:border-[#FFB000] rounded-sm text-zinc-100"
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         />

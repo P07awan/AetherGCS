@@ -63,7 +63,12 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
             <div
               key={d.id}
               data-testid={`drone-row-${d.id}`}
-              onClick={() => setActive(d.id)}
+              onClick={(e) => {
+                setActive(d.id);
+                if (!e.ctrlKey && !e.metaKey) {
+                  useGCS.getState().setSelected([d.id]);
+                }
+              }}
               className={`px-3 py-2.5 border-b border-zinc-800 cursor-pointer group ${
                 active ? "bg-zinc-800" : "hover:bg-zinc-800/60"
               }`}

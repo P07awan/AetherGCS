@@ -19,6 +19,7 @@ from .models import Drone, Waypoint
 logger = logging.getLogger(__name__)
 
 R_EARTH = 6_371_000.0  # meters
+MAX_TAKEOFF_ALTITUDE = 120.0  # metres — GCS safety hard limit
 
 # ---------------------------------------------------------------------------
 # Geometry helpers
@@ -77,6 +78,43 @@ def _ardupilot_mode_str(custom_mode: int) -> str:
 def _px4_mode_str(custom_mode: int) -> str:
     main = (custom_mode >> 16) & 0xFF
     return _PX4_MODE_MAP.get(main, f"MODE_{main}")
+
+
+def _update_flight_state_from_telemetry(t) -> None:
+    """
+    Derive flight_state from real telemetry (armed flag, flight mode, altitude).
+
+    This is called on every HEARTBEAT and GLOBAL_POSITION_INT so that transient
+    command states (ARMING, TAKING_OFF, LANDING) are resolved as soon as the
+    flight controller confirms the actual state.
+
+    State transitions:
+      not armed                     → DISARMED
+      armed + AUTO mode             → MISSION_ACTIVE
+      armed + LAND/RTL mode         → LANDING  (or DISARMED if on ground)
+      armed + altitude > 1.5 m AGL → AIRBORNE
+      armed + altitude ≤ 1.5 m AGL → ARMED (on ground)
+    """
+    if not t.armed:
+        t.flight_state = "DISARMED"
+        return
+
+    mode = t.flight_mode or ""
+    alt = t.altitude_relative or 0.0
+
+    if mode == "AUTO":
+        t.flight_state = "MISSION_ACTIVE"
+    elif mode in ("LAND", "RTL"):
+        # Detect touch-down: altitude essentially zero
+        if alt <= 0.2:
+            t.flight_state = "DISARMED"   # FC will auto-disarm; pre-empt the display
+        else:
+            t.flight_state = "LANDING"
+    elif alt > 1.5:
+        t.flight_state = "AIRBORNE"
+    else:
+        # On ground, armed (covers ARMING transient \u2014 once armed is True it shows ARMED)
+        t.flight_state = "ARMED"
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +186,9 @@ class DroneWorker(ABC):
     @abstractmethod
     async def level_horizon(self) -> None: ...
 
+    @abstractmethod
+    async def set_flight_mode(self, mode: str) -> None: ...
+
 
 # ---------------------------------------------------------------------------
 # SimulatorWorker  (original physics-lite implementation)
@@ -208,8 +249,13 @@ class SimulatorWorker(DroneWorker):
     async def arm(self) -> None:
         if self.drone.status != "connected":
             await self.connect()
+        self.drone.telemetry.flight_state = "ARMING"
+        self.on_update(self.drone)
+        # Simulate a brief arming delay (like waiting for ACK)
+        await asyncio.sleep(0.2)
         self.drone.telemetry.armed = True
         self._t_armed = time.time()
+        self.drone.telemetry.flight_state = "ARMED"
         self.on_update(self.drone)
 
     async def disarm(self) -> None:
@@ -217,26 +263,39 @@ class SimulatorWorker(DroneWorker):
         self._velocity_body = [0.0, 0.0, 0.0]
         self._yaw_rate = 0.0
         self._mission_running = False
+        self.drone.telemetry.flight_state = "DISARMED"
         self.on_update(self.drone)
 
-    async def takeoff(self, altitude: float = 15.0) -> None:
+    async def takeoff(self, altitude: float = 10.0) -> None:
         if not self.drone.telemetry.armed:
-            await self.arm()
+            raise RuntimeError(
+                "Drone is not armed. Click ARM first, then TAKEOFF."
+            )
+        if altitude <= 0 or altitude > MAX_TAKEOFF_ALTITUDE:
+            raise RuntimeError(
+                f"Requested altitude {altitude:.1f}m exceeds safety limit of {MAX_TAKEOFF_ALTITUDE}m."
+            )
+        self.drone.telemetry.flight_state = "TAKEOFF_REQUESTED"
         self.drone.telemetry.flight_mode = "GUIDED"
         self._velocity_body = [0.0, 0.0, 2.0]
         self._takeoff_target = altitude
+        self.drone.telemetry.flight_state = "TAKING_OFF"
         self.on_update(self.drone)
 
     async def land(self) -> None:
         self.drone.telemetry.flight_mode = "LAND"
         self._velocity_body = [0.0, 0.0, -1.5]
         self._yaw_rate = 0.0
+        self.drone.telemetry.flight_state = "LANDING"
         self.on_update(self.drone)
 
     async def hold(self) -> None:
         self.drone.telemetry.flight_mode = "LOITER"
         self._velocity_body = [0.0, 0.0, 0.0]
         self._yaw_rate = 0.0
+        # Only update to AIRBORNE if we're actually in the air
+        if self.drone.telemetry.altitude_relative > 0.5:
+            self.drone.telemetry.flight_state = "AIRBORNE"
         self.on_update(self.drone)
 
     async def rtl(self) -> None:
@@ -251,6 +310,7 @@ class SimulatorWorker(DroneWorker):
         self._yaw_rate = 0.0
         self._mission_running = False
         self.drone.telemetry.flight_mode = "MANUAL"
+        self.drone.telemetry.flight_state = "DISARMED"
         self.on_update(self.drone)
 
     async def level_horizon(self) -> None:
@@ -276,10 +336,13 @@ class SimulatorWorker(DroneWorker):
         if not self._mission:
             raise RuntimeError("No mission uploaded")
         if not self.drone.telemetry.armed:
-            await self.arm()
+            raise RuntimeError(
+                "Drone is not armed. ARM the drone before starting a mission."
+            )
         self.drone.telemetry.flight_mode = "AUTO"
         self._mission_running = True
         self._mission_paused = False
+        self.drone.telemetry.flight_state = "MISSION_ACTIVE"
         self.on_update(self.drone)
 
     async def pause_mission(self) -> None:
@@ -302,6 +365,24 @@ class SimulatorWorker(DroneWorker):
         self._mission_index = 0
         self._mission_running = False
         self.on_update(self.drone)
+
+    async def set_flight_mode(self, mode: str) -> None:
+        """Switch to a named flight mode on the simulator."""
+        VALID = {"STABILIZE", "ALT_HOLD", "POSHOLD", "GUIDED", "LOITER", "AUTO", "LAND", "RTL", "MANUAL"}
+        m = mode.upper()
+        if m not in VALID:
+            raise ValueError(f"Simulator: unknown mode '{mode}'. Valid: {', '.join(sorted(VALID))}")
+        self.drone.telemetry.flight_mode = m
+        # Stop velocity so the mode change takes effect visually
+        if m in ("LOITER", "STABILIZE", "ALT_HOLD", "POSHOLD", "GUIDED"):
+            self._velocity_body = [0.0, 0.0, 0.0]
+            self._yaw_rate = 0.0
+        if m == "LAND":
+            self._velocity_body = [0.0, 0.0, -1.5]
+            self._yaw_rate = 0.0
+            self.drone.telemetry.flight_state = "LANDING"
+        self.on_update(self.drone)
+        logger.info("Simulator %s mode → %s", self.drone.id, m)
 
     # ---- main loop ---------------------------------------------------------
     async def _run(self) -> None:
@@ -355,10 +436,12 @@ class SimulatorWorker(DroneWorker):
             else:
                 self._velocity_body = [min(8.0, dist * 0.5), 0.0, 0.0]
 
-        # takeoff auto-level
+        # takeoff auto-level: stop climbing and transition to AIRBORNE
         if t.altitude_relative >= self._takeoff_target and t.flight_mode == "GUIDED":
             self._velocity_body[2] = 0.0
             t.flight_mode = "LOITER"
+            if t.flight_state == "TAKING_OFF":
+                t.flight_state = "AIRBORNE"
 
         t.heading = (t.heading + self._yaw_rate * dt) % 360.0
 
@@ -379,6 +462,7 @@ class SimulatorWorker(DroneWorker):
                 t.armed = False
                 self._velocity_body = [0.0, 0.0, 0.0]
                 t.flight_mode = "STABILIZE"
+                _update_flight_state_from_telemetry(t)  # → DISARMED
 
             if not d.trail or _bearing_meters(
                 d.trail[-1][0], d.trail[-1][1], t.latitude, t.longitude
@@ -430,6 +514,11 @@ class MavlinkWorker(DroneWorker):
         self._rx_task: Optional[asyncio.Task] = None
         self._mission_buffer: list[Waypoint] = []
         self._pending_mission_ack = False
+        self._mission_msg_queue: asyncio.Queue = asyncio.Queue()
+        # ACK queue: COMMAND_ACK messages routed here for command confirmation
+        self._ack_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+        # Last STATUSTEXT lines (ring buffer) — captures pre-arm check failures
+        self._recent_statustext: list[str] = []
 
         d = self.drone
         d.telemetry.latitude = d.home_lat
@@ -693,6 +782,11 @@ class MavlinkWorker(DroneWorker):
                     t.flight_mode = _ardupilot_mode_str(msg.custom_mode)  # type: ignore[assignment]
             except Exception:
                 pass
+
+            # Derive flight_state entirely from telemetry — authoritative source.
+            # Transient command states (ARMING, TAKING_OFF, LANDING) are overridden here
+            # as soon as the FC confirms the real state via heartbeat.
+            _update_flight_state_from_telemetry(t)
             self.on_update(self.drone)
 
         elif typ == "GLOBAL_POSITION_INT":
@@ -700,6 +794,9 @@ class MavlinkWorker(DroneWorker):
             t.longitude         = msg.lon  / 1e7
             t.altitude_msl      = msg.alt  / 1000.0
             t.altitude_relative = msg.relative_alt / 1000.0
+            # Update flight_state based on altitude change —
+            # catches TAKING_OFF → AIRBORNE as the drone climbs
+            _update_flight_state_from_telemetry(t)
             # trail point
             d = self.drone
             if not d.trail or _bearing_meters(
@@ -781,6 +878,12 @@ class MavlinkWorker(DroneWorker):
             batt_pct = msg.battery_remaining       # 0-100 or -1
             rep_pct = float(batt_pct) if 0 <= batt_pct <= 100 else None
             t.battery_percent = self._calc_battery_percent(t.battery_voltage, rep_pct)
+            
+            # Check EKF health via MAV_SYS_STATUS_AHRS (0x10000)
+            sensors_health = getattr(msg, "onboard_control_sensors_health", 0)
+            if sensors_health > 0:
+                t.ekf_ok = bool(sensors_health & 0x10000)
+                
             self.on_update(self.drone)
 
         elif typ == "BATTERY_STATUS":
@@ -804,13 +907,34 @@ class MavlinkWorker(DroneWorker):
             # Track active waypoint index (update drone firmware info if needed)
             pass
 
+        elif typ in ("MISSION_REQUEST", "MISSION_REQUEST_INT", "MISSION_ACK"):
+            try:
+                self._mission_msg_queue.put_nowait(msg)
+            except Exception:
+                pass
+
+        elif typ == "COMMAND_ACK":
+            # Route to the ACK queue so waiting commands can read their result
+            try:
+                self._ack_queue.put_nowait(msg)
+            except Exception:
+                pass
+
         elif typ == "STATUSTEXT":
-            logger.info(
-                "DRONE %s STATUS: [%s] %s",
-                self.drone.name,
-                getattr(msg, "severity", "?"),
-                msg.text.rstrip("\x00"),
-            )
+            text = msg.text.rstrip("\x00")
+            # Buffer recent statustext for rejection reason retrieval
+            self._recent_statustext.append(text)
+            if len(self._recent_statustext) > 10:
+                self._recent_statustext.pop(0)
+            if text.startswith("PreArm:") or text.startswith("Arm:"):
+                logger.warning("DRONE %s PRE-ARM: %s", self.drone.name, text)
+            else:
+                logger.info(
+                    "DRONE %s STATUS: [%s] %s",
+                    self.drone.name,
+                    getattr(msg, "severity", "?"),
+                    text,
+                )
 
     # ---- GCS heartbeat loop ------------------------------------------------
     async def _heartbeat_loop(self) -> None:
@@ -876,55 +1000,253 @@ class MavlinkWorker(DroneWorker):
                 err += f" - {self.drone.last_error}"
             raise RuntimeError(err)
 
+    async def _wait_for_ack(self, command_id: int, timeout: float = 5.0) -> None:
+        """
+        Wait for COMMAND_ACK matching command_id.
+        Raises RuntimeError with the actual rejection reason if the FC rejects the command.
+        MAV_RESULT values: 0=ACCEPTED, 1=TEMPORARILY_REJECTED, 2=DENIED, 3=UNSUPPORTED, 4=FAILED
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                # Gather any recent statustext for context
+                recent = "; ".join(self._recent_statustext[-3:]) if self._recent_statustext else ""
+                hint = f" ({recent})" if recent else ""
+                raise TimeoutError(
+                    f"No COMMAND_ACK received for command {command_id} within {timeout}s{hint}"
+                )
+            try:
+                msg = await asyncio.wait_for(self._ack_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                recent = "; ".join(self._recent_statustext[-3:]) if self._recent_statustext else ""
+                hint = f" ({recent})" if recent else ""
+                raise TimeoutError(
+                    f"No COMMAND_ACK received for command {command_id} within {timeout}s{hint}"
+                )
+
+            # Match the command we sent (older FW may not include command field)
+            ack_cmd = getattr(msg, "command", None)
+            if ack_cmd is not None and ack_cmd != command_id:
+                # Stale ACK from a different command — discard and keep waiting.
+                # (Do NOT put it back — that causes an infinite loop.)
+                await asyncio.sleep(0.02)
+                continue
+
+            result = getattr(msg, "result", -1)
+            if result == 0:  # MAV_RESULT_ACCEPTED
+                return
+
+            # Build rejection message with any statustext context
+            result_names = {
+                1: "TEMPORARILY_REJECTED",
+                2: "DENIED",
+                3: "UNSUPPORTED",
+                4: "FAILED",
+                5: "IN_PROGRESS",
+            }
+            result_str = result_names.get(result, f"RESULT_{result}")
+            # Find most relevant statustext (PreArm: / Arm: lines)
+            prearm_msgs = [
+                s for s in self._recent_statustext
+                if s.startswith("PreArm:") or s.startswith("Arm:")
+            ]
+            detail = prearm_msgs[-1] if prearm_msgs else (
+                self._recent_statustext[-1] if self._recent_statustext else ""
+            )
+            raise RuntimeError(
+                f"Command {command_id} rejected: {result_str}"
+                + (f" — {detail}" if detail else "")
+            )
+
     # ---- flight commands ---------------------------------------------------
     async def arm(self) -> None:
-        self._require_mav()
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._send_command_long(
-                400,  # MAV_CMD_COMPONENT_ARM_DISARM
-                1.0,  # arm
-            ),
-        )
-        logger.info("ARM sent to %s", self.drone.name)
-
-    async def disarm(self) -> None:
-        self._require_mav()
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._send_command_long(400, 0.0),
-        )
-        logger.info("DISARM sent to %s", self.drone.name)
-
-    async def takeoff(self, altitude: float = 15.0) -> None:
+        """ARM the drone. Waits for COMMAND_ACK and verifies heartbeat confirms armed==True."""
         self._require_mav()
         loop = asyncio.get_running_loop()
-        # Set GUIDED mode first
-        await loop.run_in_executor(None, lambda: self._set_mode("GUIDED"))
-        await asyncio.sleep(0.3)
-        # ARM
-        await self.arm()
-        await asyncio.sleep(0.5)
-        # NAV_TAKEOFF
+        # Clear stale ACKs
+        while not self._ack_queue.empty():
+            try:
+                self._ack_queue.get_nowait()
+            except Exception:
+                break
+        self._recent_statustext.clear()
+
+        self.drone.telemetry.flight_state = "ARMING"
+        self.on_update(self.drone)
+
         await loop.run_in_executor(
             None,
             lambda: self._send_command_long(
-                22,   # MAV_CMD_NAV_TAKEOFF
-                0, 0, 0, 0,
-                self.drone.home_lat,
-                self.drone.home_lon,
-                altitude,
+                400,  # MAV_CMD_COMPONENT_ARM_DISARM
+                1.0,  # param1: 1=arm
+                0.0,  # param2: 0=normal arm (not force)
             ),
         )
-        logger.info("TAKEOFF to %.1fm sent to %s", altitude, self.drone.name)
+        logger.info("ARM command sent to %s", self.drone.name)
+
+        # Wait for COMMAND_ACK — raises RuntimeError with actual reason if rejected
+        await self._wait_for_ack(400, timeout=5.0)
+
+        # Verify heartbeat confirms armed == True (up to 3 seconds)
+        for _ in range(15):
+            if self.drone.telemetry.armed:
+                break
+            await asyncio.sleep(0.2)
+        if not self.drone.telemetry.armed:
+            raise RuntimeError(
+                "ARM command was accepted but heartbeat never confirmed armed state"
+            )
+
+        self.drone.telemetry.flight_state = "ARMED"
+        self.on_update(self.drone)
+        logger.info("ARMED confirmed on %s", self.drone.name)
+
+    async def disarm(self) -> None:
+        """DISARM the drone. Sends DISARM command, verifies heartbeat confirms armed==False."""
+        self._require_mav()
+
+        # If already disarmed, consider it success immediately
+        if not self.drone.telemetry.armed:
+            self.drone.telemetry.flight_state = "DISARMED"
+            self.on_update(self.drone)
+            logger.info("Drone %s already disarmed", self.drone.name)
+            return
+
+        loop = asyncio.get_running_loop()
+        # Clear stale ACKs before sending
+        while not self._ack_queue.empty():
+            try:
+                self._ack_queue.get_nowait()
+            except Exception:
+                break
+
+        await loop.run_in_executor(
+            None,
+            lambda: self._send_command_long(400, 0.0, 0.0),
+        )
+        logger.info("DISARM command sent to %s", self.drone.name)
+
+        # Wait for ACK — handle DENIED gracefully (may already be disarmed)
+        try:
+            await self._wait_for_ack(400, timeout=5.0)
+        except RuntimeError as exc:
+            # If FC says DENIED/TEMPORARILY_REJECTED but drone is already disarmed
+            # (e.g. FC auto-disarmed after landing), treat as success
+            if not self.drone.telemetry.armed:
+                logger.info("DISARM ACK non-zero but drone already disarmed: %s", exc)
+            else:
+                raise
+
+        # Verify heartbeat confirms armed == False (up to 3 seconds)
+        for _ in range(15):
+            if not self.drone.telemetry.armed:
+                break
+            await asyncio.sleep(0.2)
+
+        self.drone.telemetry.flight_state = "DISARMED"
+        self.on_update(self.drone)
+        logger.info("DISARMED confirmed on %s", self.drone.name)
+
+    async def takeoff(self, altitude: float = 10.0) -> None:
+        """
+        Command the drone to take off to the specified altitude.
+
+        Preconditions (raises RuntimeError if violated):
+          - Drone must be connected.
+          - Drone must already be armed (call arm() first).
+          - Altitude must be > 0 and <= MAX_TAKEOFF_ALTITUDE.
+
+        Does NOT auto-arm, does NOT land after reaching altitude.
+        """
+        self._require_mav()
+        t = self.drone.telemetry
+
+        if not t.armed:
+            raise RuntimeError(
+                "Drone is not armed. Click ARM first, then click TAKEOFF."
+            )
+        if altitude <= 0:
+            raise RuntimeError("Takeoff altitude must be greater than 0 metres.")
+        if altitude > MAX_TAKEOFF_ALTITUDE:
+            raise RuntimeError(
+                f"Requested altitude {altitude:.1f}m exceeds safety limit of "
+                f"{MAX_TAKEOFF_ALTITUDE:.0f}m. Reduce the takeoff altitude."
+            )
+
+        loop = asyncio.get_running_loop()
+
+        # Clear stale ACKs
+        while not self._ack_queue.empty():
+            try:
+                self._ack_queue.get_nowait()
+            except Exception:
+                break
+
+        # Switch to GUIDED mode (required for MAV_CMD_NAV_TAKEOFF on ArduCopter)
+        await loop.run_in_executor(None, lambda: self._set_mode("GUIDED"))
+        await asyncio.sleep(0.3)
+
+        self.drone.telemetry.flight_state = "TAKEOFF_REQUESTED"
+        self.on_update(self.drone)
+
+        # MAV_CMD_NAV_TAKEOFF (22)
+        # param1: min pitch (deg) — 0 for copter
+        # param2: empty
+        # param3: empty
+        # param4: yaw angle — NaN to keep current
+        # param5: lat — 0 means use current position
+        # param6: lon — 0 means use current position
+        # param7: altitude (metres, relative to home)
+        #
+        # BUG FIX: Previous code incorrectly passed home_lat/home_lon into params 5&6.
+        # This caused ArduPilot to navigate to home as a waypoint then land.
+        # Correct: pass 0 (or NaN) so the FC uses the current position.
+        await loop.run_in_executor(
+            None,
+            lambda: self._send_command_long(
+                22,        # MAV_CMD_NAV_TAKEOFF
+                0.0,       # param1: min pitch
+                0.0,       # param2: empty
+                0.0,       # param3: empty
+                float("nan"),  # param4: yaw (NaN = keep current)
+                0.0,       # param5: lat (0 = current position)
+                0.0,       # param6: lon (0 = current position)
+                float(altitude),  # param7: target altitude in metres AGL
+            ),
+        )
+        logger.info("MAV_CMD_NAV_TAKEOFF sent to %s (target: %.1fm)", self.drone.name, altitude)
+
+        # Wait for COMMAND_ACK
+        await self._wait_for_ack(22, timeout=5.0)
+
+        self.drone.telemetry.flight_state = "TAKING_OFF"
+        self.on_update(self.drone)
+        logger.info("TAKEOFF accepted by %s — climbing to %.1fm", self.drone.name, altitude)
 
     async def land(self) -> None:
+        """Command the drone to land at current position."""
         self._require_mav()
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._send_command_long(21),  # MAV_CMD_NAV_LAND
-        )
-        logger.info("LAND sent to %s", self.drone.name)
+        loop = asyncio.get_running_loop()
+
+        self.drone.telemetry.flight_state = "LANDING"
+        self.on_update(self.drone)
+
+        # Prefer set_mode("LAND") — more reliable on ArduCopter than MAV_CMD_NAV_LAND.
+        # Fall back to COMMAND_LONG if mode mapping is unavailable.
+        try:
+            await loop.run_in_executor(None, lambda: self._set_mode("LAND"))
+            logger.info("LAND mode set on %s", self.drone.name)
+        except Exception as mode_err:
+            logger.warning(
+                "set_mode(LAND) failed on %s (%s), trying MAV_CMD_NAV_LAND",
+                self.drone.name, mode_err,
+            )
+            await loop.run_in_executor(
+                None,
+                lambda: self._send_command_long(21),  # MAV_CMD_NAV_LAND
+            )
+            logger.info("MAV_CMD_NAV_LAND sent to %s", self.drone.name)
 
     async def hold(self) -> None:
         self._require_mav()
@@ -1007,61 +1329,88 @@ class MavlinkWorker(DroneWorker):
         self._require_mav()
         self._mission_buffer = waypoints
         loop = asyncio.get_running_loop()
-
-        count = len(waypoints)
-        logger.info("Uploading %d waypoints to %s", count, self.drone.name)
-
-        await loop.run_in_executor(
-            None,
-            lambda: self._do_upload_mission(waypoints),
-        )
-
-    def _do_upload_mission(self, waypoints: list[Waypoint]) -> None:
-        """Blocking mission upload using MAVLink mission protocol."""
         from pymavlink import mavutil as _mu
 
-        mav = self._mav
         count = len(waypoints)
+        logger.info("Mission upload started")
+        logger.info(f"Mission contains {count} waypoints")
+        logger.info("Sending mission to vehicle")
 
-        # Send mission count
-        mav.mav.mission_count_send(mav.target_system, mav.target_component, count, 0)
+        # Clear the queue of any stale messages
+        while not self._mission_msg_queue.empty():
+            try:
+                self._mission_msg_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
-        for i, wp in enumerate(waypoints):
-            # Wait for MISSION_REQUEST_INT
-            req = mav.recv_match(type=["MISSION_REQUEST", "MISSION_REQUEST_INT"], blocking=True, timeout=5)
-            if req is None:
-                raise TimeoutError(f"No MISSION_REQUEST for item {i}")
-
-            # Build MAVLink MISSION_ITEM_INT
-            mav.mav.mission_item_int_send(
-                mav.target_system,
-                mav.target_component,
-                i,                                    # seq
-                _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                _mu.mavlink.MAV_CMD_NAV_WAYPOINT,
-                0,                                    # current
-                1,                                    # auto-continue
-                wp.hold_seconds,                      # param1 hold time
-                0, 0,                                 # param2 accept radius, param3 pass radius
-                float("nan"),                         # param4 yaw
-                int(wp.latitude  * 1e7),              # x = lat
-                int(wp.longitude * 1e7),              # y = lon
-                wp.altitude,                          # z = altitude (relative)
-                0,                                    # mission_type
+        try:
+            # Send mission count
+            await loop.run_in_executor(
+                None,
+                lambda: self._mav.mav.mission_count_send(
+                    self._mav.target_system, self._mav.target_component, count, 0
+                )
             )
 
-        # Wait for MISSION_ACK
-        ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
-        if ack is None:
-            raise TimeoutError("No MISSION_ACK after upload")
-        if ack.type != 0:  # MAV_MISSION_ACCEPTED = 0
-            raise RuntimeError(f"Mission upload rejected: type={ack.type}")
-        logger.info("Mission upload acknowledged by %s", self.drone.name)
+            while True:
+                try:
+                    msg = await asyncio.wait_for(self._mission_msg_queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    raise TimeoutError("Mission upload timed out waiting for drone response")
+
+                if msg.get_type() in ("MISSION_REQUEST", "MISSION_REQUEST_INT"):
+                    seq = msg.seq
+                    if seq >= len(waypoints):
+                        raise RuntimeError(f"Drone requested invalid waypoint index {seq}")
+                    wp = waypoints[seq]
+                    await loop.run_in_executor(
+                        None,
+                        lambda seq=seq, wp=wp: self._mav.mav.mission_item_int_send(
+                            self._mav.target_system,
+                            self._mav.target_component,
+                            seq,                                    # seq
+                            _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                            _mu.mavlink.MAV_CMD_NAV_WAYPOINT,
+                            0,                                    # current
+                            1,                                    # auto-continue
+                            wp.hold_seconds,                      # param1 hold time
+                            0, 0,                                 # param2 accept radius, param3 pass radius
+                            float("nan"),                         # param4 yaw
+                            int(wp.latitude  * 1e7),              # x = lat
+                            int(wp.longitude * 1e7),              # y = lon
+                            wp.altitude,                          # z = altitude (relative)
+                            0,                                    # mission_type
+                        )
+                    )
+                elif msg.get_type() == "MISSION_ACK":
+                    if msg.type != 0:
+                        raise RuntimeError(f"Mission upload rejected: type={msg.type}")
+                    logger.info("Mission upload completed")
+                    break
+        except Exception:
+            logger.exception("Mission upload failed")
+            raise
 
     async def start_mission(self) -> None:
+        """Start the uploaded mission. Drone must already be armed."""
         self._require_mav()
         loop = asyncio.get_running_loop()
+        t = self.drone.telemetry
+
+        logger.info(
+            "Start Mission: Mode=%s, Armed=%s, GPS Fix=%s, EKF OK=%s",
+            t.flight_mode, t.armed, t.gps_fix, t.ekf_ok,
+        )
+
+        if not t.armed:
+            raise RuntimeError(
+                "Drone is not armed. ARM the drone before starting a mission."
+            )
+
+        # Switch to AUTO
         await loop.run_in_executor(None, lambda: self._set_mode("AUTO"))
+
+        # Send MISSION_START
         await loop.run_in_executor(
             None,
             lambda: self._send_command_long(
@@ -1069,6 +1418,8 @@ class MavlinkWorker(DroneWorker):
                 0, 0,
             ),
         )
+        self.drone.telemetry.flight_state = "MISSION_ACTIVE"
+        self.on_update(self.drone)
         logger.info("MISSION START sent to %s", self.drone.name)
 
     async def pause_mission(self) -> None:
@@ -1098,3 +1449,11 @@ class MavlinkWorker(DroneWorker):
             ),
         )
         logger.info("MISSION CLEAR sent to %s", self.drone.name)
+
+    async def set_flight_mode(self, mode: str) -> None:
+        """Switch flight mode by name (ArduCopter or PX4)."""
+        self._require_mav()
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self._set_mode(mode.upper())
+        )
+        logger.info("Mode → %s sent to %s", mode.upper(), self.drone.name)

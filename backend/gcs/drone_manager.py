@@ -180,8 +180,14 @@ class DroneManager:
             await worker.stop_mission()
         elif cmd == "clear_mission":
             await worker.clear_mission()
+        elif cmd == "set_mode":
+            mode = params.get("mode", "").upper()
+            if not mode:
+                raise ValueError("set_mode requires a 'mode' parameter")
+            await worker.set_flight_mode(mode)
         else:
             raise ValueError(f"Unknown command: {command}")
+
 
     async def shutdown(self) -> None:
         await asyncio.gather(*[w.disconnect() for w in self.workers.values()], return_exceptions=True)
