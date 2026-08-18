@@ -44,7 +44,7 @@ export default function ManualControl() {
           // silently fail continuous commands to avoid log spam, 
           // but could add a subtle indicator if needed
         }
-      }, 250); // 4Hz
+      }, 50); // 20Hz
     }
   };
 

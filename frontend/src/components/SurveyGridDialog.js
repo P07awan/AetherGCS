@@ -10,7 +10,7 @@ import { commandsApi } from "@/services/api";
 export default function SurveyGridDialog({ open, onOpenChange }) {
   const activeDrone = useActiveDrone();
   const setDraftWaypoints = useGCS((s) => s.setDraftWaypoints);
-  
+
   const [altitude, setAltitude] = useState(25);
   const [widthMeters, setWidthMeters] = useState(100);
   const [lengthMeters, setLengthMeters] = useState(100);

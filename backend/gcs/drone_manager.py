@@ -85,16 +85,15 @@ class DroneManager:
             return drone
 
     async def remove_drone(self, drone_id: str) -> None:
-        worker = self.workers.get(drone_id)
-        if not worker:
-            return
-        await worker.disconnect()
-        del self.workers[drone_id]
-        try:
-            db = get_db()
-            await db.drones.delete_one({"id": drone_id})
-        except Exception as e:
-            logger.warning("MongoDB unavailable for remove_drone %s: %s", drone_id, e)
+        async with self._lock:
+            worker = self.workers.pop(drone_id, None)
+            if worker:
+                await worker.disconnect()
+            try:
+                db = get_db()
+                await db.drones.delete_one({"id": drone_id})
+            except Exception as e:
+                logger.warning("MongoDB unavailable for remove_drone %s: %s", drone_id, e)
 
     def list_drones(self) -> List[Drone]:
         return [w.drone for w in self.workers.values()]
@@ -129,9 +128,15 @@ class DroneManager:
             worker = self.workers.get(did)
             if not worker:
                 continue
-            # Auto-connect simulator worker if not connected
-            if worker.drone.status != "connected" and isinstance(worker, SimulatorWorker):
-                await worker.connect()
+            # Auto-connect simulator workers if not connected (convenience for testing)
+            if worker.drone.status != "connected":
+                if isinstance(worker, SimulatorWorker):
+                    await worker.connect()
+                else:
+                    raise RuntimeError(
+                        f"Drone '{worker.drone.name}' is disconnected. "
+                        "Connect it first before sending commands."
+                    )
             tasks.append(self._dispatch(worker, command, params))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         errors = [r for r in results if isinstance(r, Exception)]

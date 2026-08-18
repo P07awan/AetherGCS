@@ -172,8 +172,6 @@ async def get_drone(drone_id: str):
 
 @api.delete("/drones/{drone_id}")
 async def delete_drone(drone_id: str):
-    if not drone_manager.get_drone(drone_id):
-        raise HTTPException(404, "Drone not found")
     await drone_manager.remove_drone(drone_id)
     broadcaster.push("drone_removed", {"id": drone_id})
     return {"ok": True}

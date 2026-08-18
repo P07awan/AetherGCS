@@ -249,6 +249,8 @@ class SimulatorWorker(DroneWorker):
     async def arm(self) -> None:
         if self.drone.status != "connected":
             await self.connect()
+        if self.drone.telemetry.armed:
+            raise RuntimeError("Drone is already armed.")
         self.drone.telemetry.flight_state = "ARMING"
         self.on_update(self.drone)
         # Simulate a brief arming delay (like waiting for ACK)
@@ -259,6 +261,12 @@ class SimulatorWorker(DroneWorker):
         self.on_update(self.drone)
 
     async def disarm(self) -> None:
+        alt = self.drone.telemetry.altitude_relative or 0.0
+        if alt > 0.5:
+            raise RuntimeError(
+                f"Cannot disarm: drone is airborne at {alt:.1f}m AGL. "
+                "LAND the drone first."
+            )
         self.drone.telemetry.armed = False
         self._velocity_body = [0.0, 0.0, 0.0]
         self._yaw_rate = 0.0

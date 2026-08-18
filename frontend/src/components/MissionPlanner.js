@@ -110,10 +110,10 @@ export default function MissionPlanner() {
   const targetText = selected.length > 1
     ? `SWARM: ${selected.length} DRONES`
     : selected.length === 1
-    ? `DRONE: ${selected[0].name}`
-    : primaryDrone
-    ? `DRONE: ${primaryDrone.name}`
-    : "NO DRONE SELECTED";
+      ? `DRONE: ${selected[0].name}`
+      : primaryDrone
+        ? `DRONE: ${primaryDrone.name}`
+        : "NO DRONE SELECTED";
 
   return (
     <div data-testid="mission-planner" className="h-full flex flex-col bg-zinc-950">
@@ -122,13 +122,12 @@ export default function MissionPlanner() {
         <span className="font-display font-black text-[11px] tracking-widest text-zinc-100">
           MISSION PLANNER
         </span>
-        <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase border ${
-          selected.length > 1
+        <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase border ${selected.length > 1
             ? "bg-amber-950/60 border-amber-500 text-amber-300"
             : (selected.length === 1 || primaryDrone)
-            ? "bg-cyan-950/60 border-cyan-500 text-cyan-300"
-            : "bg-zinc-800 border-zinc-700 text-zinc-500"
-        }`}>
+              ? "bg-cyan-950/60 border-cyan-500 text-cyan-300"
+              : "bg-zinc-800 border-zinc-700 text-zinc-500"
+          }`}>
           {targetText}
         </span>
         <input

@@ -147,21 +147,21 @@ function TakeoffControl({ armed, onTakeoff, disabled }) {
 // ---------------------------------------------------------------------------
 
 const FLIGHT_MODES = [
-  { group: "Manual",         modes: ["STABILIZE", "ALT_HOLD", "POSHOLD"] },
-  { group: "GCS Commanded",  modes: ["GUIDED", "LOITER"] },
-  { group: "Autonomous",     modes: ["AUTO"] },
-  { group: "Navigation",     modes: ["LAND", "RTL"] },
+  { group: "Manual", modes: ["STABILIZE", "ALT_HOLD", "POSHOLD"] },
+  { group: "GCS Commanded", modes: ["GUIDED", "LOITER"] },
+  { group: "Autonomous", modes: ["AUTO"] },
+  { group: "Navigation", modes: ["LAND", "RTL"] },
 ];
 
 const MODE_COLORS = {
   STABILIZE: "text-zinc-400",
-  ALT_HOLD:  "text-zinc-400",
-  POSHOLD:   "text-zinc-400",
-  GUIDED:    "text-[#FFB000]",
-  LOITER:    "text-[#00FF41]",
-  AUTO:      "text-[#00F0FF]",
-  LAND:      "text-orange-400",
-  RTL:       "text-orange-400",
+  ALT_HOLD: "text-zinc-400",
+  POSHOLD: "text-zinc-400",
+  GUIDED: "text-[#FFB000]",
+  LOITER: "text-[#00FF41]",
+  AUTO: "text-[#00F0FF]",
+  LAND: "text-orange-400",
+  RTL: "text-orange-400",
 };
 
 function FlightModeSelector({ currentMode, onSetMode, disabled }) {
@@ -189,11 +189,10 @@ function FlightModeSelector({ currentMode, onSetMode, disabled }) {
           `h-9 px-2.5 flex items-center gap-1.5 rounded-sm border text-xs font-mono font-semibold
            uppercase tracking-wider transition-colors
            disabled:opacity-40 disabled:cursor-not-allowed
-           ${
-             open
-               ? "bg-zinc-700 border-zinc-500 " + modeColor
-               : "bg-zinc-800 border-zinc-600 hover:border-zinc-400 " + modeColor
-           }`
+           ${open
+            ? "bg-zinc-700 border-zinc-500 " + modeColor
+            : "bg-zinc-800 border-zinc-600 hover:border-zinc-400 " + modeColor
+          }`
         }
       >
         <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80 flex-shrink-0" />
@@ -222,16 +221,14 @@ function FlightModeSelector({ currentMode, onSetMode, disabled }) {
                     className={
                       `w-full text-left px-4 py-1.5 text-xs font-mono font-semibold uppercase
                        tracking-wider transition-colors flex items-center gap-2
-                       ${
-                         active
-                           ? `${MODE_COLORS[m] || "text-zinc-200"} bg-zinc-800`
-                           : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
-                       }`
+                       ${active
+                        ? `${MODE_COLORS[m] || "text-zinc-200"} bg-zinc-800`
+                        : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                      }`
                     }
                   >
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                      active ? "bg-current" : "bg-zinc-600"
-                    }`} />
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? "bg-current" : "bg-zinc-600"
+                      }`} />
                     {m}
                     {active && <span className="ml-auto text-[9px] opacity-60">ACTIVE</span>}
                   </button>
@@ -276,8 +273,9 @@ export default function TopToolbar() {
   const currentMode = primaryDrone?.telemetry?.flight_mode || "";
   // Allow LAND whenever armed and drone has left the ground (or is trying to)
   const canLand = isConnected && isArmed && isDroneAirborne;
-  // Allow TAKEOFF when connected, armed, and NOT already airborne
-  const canTakeoff = isConnected && isArmed && !isDroneAirborne;
+  // Allow TAKEOFF when connected, armed, NOT already airborne, and not already in a takeoff sequence
+  const isTakingOff = ["TAKING_OFF", "TAKEOFF_REQUESTED"].includes(flightState);
+  const canTakeoff = isConnected && isArmed && !isDroneAirborne && !isTakingOff;
 
   // Generic command runner
   const run = async (cmd, params = {}, label = cmd, danger = false) => {
@@ -352,8 +350,21 @@ export default function TopToolbar() {
   const removeSelected = async () => {
     const ids = selected.length ? selected.map((d) => d.id) : activeId ? [activeId] : [];
     if (!ids.length) return toast.error("Select a drone to remove");
-    for (const id of ids) await dronesApi.remove(id);
-    toast.success(`Removed ${ids.length} drone(s)`);
+    
+    let count = 0;
+    for (const id of ids) {
+      try {
+        await dronesApi.remove(id);
+        count++;
+      } catch (e) {
+        if (e.response?.status !== 404) {
+          toast.error(`Failed to remove drone: ${e.response?.data?.detail || e.message}`);
+        }
+      }
+    }
+    if (count > 0) {
+      toast.success(`Removed ${count} drone(s)`);
+    }
   };
 
   const uploadMission = async () => {
@@ -468,7 +479,7 @@ export default function TopToolbar() {
         onClick={handleArm}
         variant="green"
         disabled={!isConnected || isArmed || flightState === "ARMING"}
-        title={isArmed ? "Already armed" : "ARM the drone"}
+        title={isArmed ? "Already armed" : flightState === "ARMING" ? "Arming in progress..." : "ARM the drone"}
       >
         <Radio className="w-4 h-4" />
       </IconBtn>
@@ -478,7 +489,11 @@ export default function TopToolbar() {
         onClick={handleDisarm}
         variant="default"
         disabled={!isConnected || !isArmed}
-        title={!isArmed ? "Already disarmed" : "DISARM the drone"}
+        title={
+          !isArmed ? "Already disarmed" :
+          isDroneAirborne ? "⚠️ Drone is airborne — LAND first, then Disarm" :
+          "DISARM the drone"
+        }
       >
         <Radio className="w-4 h-4" />
       </IconBtn>

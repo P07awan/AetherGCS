@@ -61,7 +61,7 @@ export const useGCS = create((set, get) => ({
       const nextActive = s.activeDroneId === id ? Object.keys(rest)[0] || null : s.activeDroneId;
       const nextSelected = s.selectedDroneIds.filter((x) => x !== id);
       const next = { ...s, drones: rest, selectedDroneIds: nextSelected, activeDroneId: nextActive };
-      return _syncDraft(next, restMissions);
+      return { ...next, ..._syncDraft(next, restMissions) };
     }),
 
   setSelected: (ids) =>
@@ -146,6 +146,15 @@ export const useGCS = create((set, get) => ({
       const key = _getTargetKey(s);
       const current = s.draftMissions[key] || s.draftMission || { ...DEFAULT_MISSION };
       const updatedMission = { ...current, waypoints: [] };
+      const updatedMissions = { ...s.draftMissions, [key]: updatedMission };
+      return _syncDraft(s, updatedMissions);
+    }),
+
+  setDraftWaypoints: (list) =>
+    set((s) => {
+      const key = _getTargetKey(s);
+      const current = s.draftMissions[key] || s.draftMission || { ...DEFAULT_MISSION };
+      const updatedMission = { ...current, waypoints: list };
       const updatedMissions = { ...s.draftMissions, [key]: updatedMission };
       return _syncDraft(s, updatedMissions);
     }),
