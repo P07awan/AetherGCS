@@ -20,7 +20,8 @@ export default function MissionLibraryDialog({ open, onOpenChange }) {
     }
   };
 
-  useEffect(() => { if (open) refresh(); /* eslint-disable-next-line */ }, [open]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) refresh(); }, [open]);
 
   const load = (m) => {
     setDraft({
