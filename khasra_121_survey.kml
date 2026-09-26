@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Khasra 121 Drone Survey Boundary</name>
+    <description>WGS84 EPSG:4326 Drone Boundary Boundary for GCS Import</description>
+    
+    <Placemark>
+      <name>Khasra 121 (Synthetic Boundary)</name>
+      <description>Drone Survey Boundary Geofence for Khasra 121</description>
+      <ExtendedData>
+        <Data name="crs">
+          <value>EPSG:4326 / WGS84</value>
+        </Data>
+        <Data name="coordinate_order">
+          <value>longitude,latitude,altitude</value>
+        </Data>
+        <Data name="data_class">
+          <value>SYNTHETIC_TEST</value>
+        </Data>
+        <Data name="khasra_number">
+          <value>121</value>
+        </Data>
+        <Data name="area_sq_m">
+          <value>1425.14</value>
+        </Data>
+      </ExtendedData>
+      <Style>
+        <LineStyle>
+          <color>ff0000ff</color>
+          <width>3.0</width>
+        </LineStyle>
+        <PolyStyle>
+          <color>4000aaff</color>
+        </PolyStyle>
+      </Style>
+      <Polygon>
+        <altitudeMode>clampToGround</altitudeMode>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              77.50230000,28.67590000,0.0
+              77.50245000,28.67610000,0.0
+              77.50275000,28.67608000,0.0
+              77.50280000,28.67585000,0.0
+              77.50263000,28.67575000,0.0
+              77.50237000,28.67578000,0.0
+              77.50230000,28.67590000,0.0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>

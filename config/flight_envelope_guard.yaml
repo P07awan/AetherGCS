@@ -1,0 +1,30 @@
+# Production-Grade Flight Envelope Guard Configuration
+# NIDAR 2026 / ASTRA AirMouse Flight Volume Containment
+
+flight_envelope_guard:
+  frame_id: "world"
+  drone_model: "iris_vlp16"
+  lidar_sensor: "velodyne_vlp16"
+  altimeter: "tfmini_rangefinder"
+  
+  spawn_world_x: 0.0
+  spawn_world_y: -9.5
+  spawn_world_z: 0.26
+  
+  # Authoritative World Frame Safety Boundaries
+  world_x_min: -100.0
+  world_x_max: 100.0
+  world_y_min: -100.0
+  world_y_max: 100.0
+  world_z_min: 1.0
+  world_z_max: 120.0
+
+  # Safety Limits & Rates
+  boundary_margin: 0.5
+  boundary_margin_z: 0.2
+  publish_rate: 20.0
+  default_altitude: 20.0
+  max_velocity_ms: 6.0
+  max_yaw_rate_rad_s: 1.047
+  vision_timeout_s: 1.0
+  range_timeout_s: 1.0

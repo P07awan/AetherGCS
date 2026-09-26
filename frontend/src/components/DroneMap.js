@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
-import { MapContainer, TileLayer, Marker, Polyline, Circle, useMap, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMap, useMapEvents } from "react-leaflet";
 import { useGCS, useDroneList, useActiveDrone } from "@/store/gcsStore";
 import { Crosshair, Navigation as NavIcon, Layers, Lock, Unlock } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -140,6 +140,27 @@ function MapResizeInvalidator() {
     observer.observe(map.getContainer());
     return () => observer.disconnect();
   }, [map]);
+  return null;
+}
+
+function AutoFitMissionBoundsHandler({ waypoints }) {
+  const map = useMap();
+  const fittedRef = useRef("");
+
+  useEffect(() => {
+    if (!waypoints || waypoints.length < 2) return;
+    const wpKey = waypoints.map((w) => `${w.latitude.toFixed(5)},${w.longitude.toFixed(5)}`).join("|");
+    if (fittedRef.current === wpKey) return;
+
+    try {
+      const bounds = L.latLngBounds(waypoints.map((w) => [w.latitude, w.longitude]));
+      map.fitBounds(bounds.pad(0.25), { animate: true });
+      fittedRef.current = wpKey;
+    } catch (e) {
+      console.error("Fit mission bounds error:", e);
+    }
+  }, [waypoints, map]);
+
   return null;
 }
 
@@ -294,6 +315,7 @@ export default function DroneMap() {
         <MapClickHandler onClick={handleMapClick} />
         <UserInteractionHandler onUserDrag={() => setAutoPan(false)} />
         <AutoPanHandler activeDrone={activeDrone} autoPan={autoPan} />
+        <AutoFitMissionBoundsHandler waypoints={draftWaypoints} />
         <MapResizeInvalidator />
 
         {/* Home positions */}
@@ -350,6 +372,20 @@ export default function DroneMap() {
             eventHandlers={{ click: () => setActive(d.id) }}
           />
         ))}
+
+        {/* Draft Mission Shaded Polygon Boundary */}
+        {draftWaypoints.length >= 3 && (
+          <Polygon
+            positions={draftWaypoints.map((w) => [w.latitude, w.longitude])}
+            pathOptions={{
+              color: "#00F0FF",
+              fillColor: "#00F0FF",
+              fillOpacity: 0.25,
+              weight: 2.5,
+              dashArray: "4, 4",
+            }}
+          />
+        )}
 
         {/* Draft Mission Polyline */}
         {draftWaypoints.length > 1 && (

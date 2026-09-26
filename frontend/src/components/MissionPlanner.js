@@ -96,6 +96,26 @@ export default function MissionPlanner() {
     }
   };
 
+  const importKmlDirect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const m = await missionsApi.importKml(file);
+      setDraft({
+        id: m.id,
+        name: m.name,
+        description: m.description,
+        default_altitude: m.default_altitude,
+        default_speed: m.default_speed,
+        waypoints: m.waypoints,
+      });
+      toast.success(`Loaded KML into Planner: ${m.name} (${m.waypoints.length} waypoints)`);
+    } catch (err) {
+      toast.error("Failed to parse KML: " + (err.response?.data?.detail || err.message));
+    }
+    e.target.value = "";
+  };
+
   const move = (seq, dir) => {
     const list = [...draft.waypoints];
     const idx = list.findIndex((w) => w.seq === seq);
@@ -154,6 +174,10 @@ export default function MissionPlanner() {
         />
 
         <div className="flex-1" />
+        <label className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-amber-400 h-8 px-2.5 text-[10px] font-mono uppercase tracking-wider border flex items-center gap-1.5 cursor-pointer rounded-sm">
+          <Upload className="w-3.5 h-3.5 text-amber-400" /> KML
+          <input type="file" accept=".kml,.kmz" className="hidden" onChange={importKmlDirect} />
+        </label>
         <Btn testid="btn-mp-upload" onClick={upload}><Upload className="w-3.5 h-3.5" /> Upload</Btn>
         <Btn testid="btn-mp-start" variant="primary" onClick={startMission}><Play className="w-3.5 h-3.5" /> Start</Btn>
         <Btn testid="btn-mp-pause" onClick={pauseMission}><Pause className="w-3.5 h-3.5" /> Pause</Btn>

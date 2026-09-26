@@ -28,4 +28,12 @@ export const missionsApi = {
   update: (id, payload) => client.put(`/missions/${id}`, payload).then((r) => r.data),
   remove: (id) => client.delete(`/missions/${id}`).then((r) => r.data),
   duplicate: (id) => client.post(`/missions/${id}/duplicate`).then((r) => r.data),
+  importKml: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return client.post("/missions/import-kml", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }).then((r) => r.data);
+  },
+  autoLoadKml: (folderPath) => client.post(`/missions/auto-load-kml?folder_path=${encodeURIComponent(folderPath || "")}`).then((r) => r.data),
 };

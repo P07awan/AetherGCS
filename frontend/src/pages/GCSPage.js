@@ -30,6 +30,7 @@ export default function GCSPage() {
   const addCommandLog = useGCS((s) => s.addCommandLog);
   const setCommandHistory = useGCS((s) => s.setCommandHistory);
   const setMissions = useGCS((s) => s.setMissions);
+  const setDraftMission = useGCS((s) => s.setDraftMission);
 
   useUserGeolocation();
 
@@ -72,6 +73,13 @@ export default function GCSPage() {
         setSnapshot(drones);
         setCommandHistory(history);
         setMissions(missions);
+
+        if (missions && missions.length > 0) {
+          const latestMission = missions[missions.length - 1];
+          if (latestMission.waypoints && latestMission.waypoints.length > 0) {
+            setDraftMission(latestMission);
+          }
+        }
       } catch (e) {
         console.error("Initial load failed", e);
       }

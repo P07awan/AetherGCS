@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<robot name="iris_vlp16">
+  <!-- FAST-LIO tracking frame (IMU origin) -->
+  <link name="body"/>
+
+  <!-- Joint connecting FAST-LIO body to PX4 base_link -->
+  <joint name="body_to_base_link_joint" type="fixed">
+    <parent link="body"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Base Link (Drone Body) -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.47 0.47 0.23"/>
+      </geometry>
+      <material name="dark_grey">
+        <color rgba="0.2 0.2 0.2 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <!-- Velodyne VLP-16 3D LiDAR Link -->
+  <link name="velodyne_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.07"/>
+      </geometry>
+      <material name="blue">
+        <color rgba="0.1 0.1 0.8 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <!-- Joint connecting LiDAR to Base Link -->
+  <joint name="velodyne_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="velodyne_link"/>
+    <origin xyz="0 0 0.12" rpy="0 0 0"/>
+  </joint>
+</robot>

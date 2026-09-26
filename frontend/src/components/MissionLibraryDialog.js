@@ -60,9 +60,22 @@ export default function MissionLibraryDialog({ open, onOpenChange }) {
         waypoints: data.waypoints || [],
       });
       await refresh();
-      toast.success("Mission imported");
+      toast.success("Mission imported from JSON");
     } catch {
-      toast.error("Invalid mission file");
+      toast.error("Invalid JSON mission file");
+    }
+    e.target.value = "";
+  };
+
+  const importKmlFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const mission = await missionsApi.importKml(file);
+      await refresh();
+      toast.success(`Loaded KML Mission: ${mission.name} (${mission.waypoints.length} waypoints)`);
+    } catch (err) {
+      toast.error("Failed to parse KML: " + (err.response?.data?.detail || err.message));
     }
     e.target.value = "";
   };
@@ -73,14 +86,21 @@ export default function MissionLibraryDialog({ open, onOpenChange }) {
       onOpenChange={onOpenChange}
       testid="mission-library-dialog"
       title="MISSION LIBRARY"
-      subtitle="Load · Duplicate · Export JSON · Delete"
+      subtitle="Load · Duplicate · Export JSON · Import KML · Delete"
       accent="#00F0FF"
       footer={
-        <label className="text-[11px] font-mono uppercase text-[#00F0FF] cursor-pointer border border-[#00F0FF]/50 hover:bg-[#00F0FF]/10 px-3 py-1.5 rounded-sm flex items-center gap-1.5">
-          <UploadIcon className="w-3.5 h-3.5" />
-          Import JSON
-          <input data-testid="input-import-mission" type="file" accept="application/json" className="hidden" onChange={importMission} />
-        </label>
+        <div className="flex items-center gap-2">
+          <label className="text-[11px] font-mono uppercase text-[#00F0FF] cursor-pointer border border-[#00F0FF]/50 hover:bg-[#00F0FF]/10 px-3 py-1.5 rounded-sm flex items-center gap-1.5">
+            <UploadIcon className="w-3.5 h-3.5" />
+            Import JSON
+            <input data-testid="input-import-mission" type="file" accept="application/json" className="hidden" onChange={importMission} />
+          </label>
+          <label className="text-[11px] font-mono uppercase text-[#FFB000] cursor-pointer border border-[#FFB000]/50 hover:bg-[#FFB000]/10 px-3 py-1.5 rounded-sm flex items-center gap-1.5">
+            <UploadIcon className="w-3.5 h-3.5" />
+            Import KML / KMZ
+            <input data-testid="input-import-kml" type="file" accept=".kml,.kmz" className="hidden" onChange={importKmlFile} />
+          </label>
+        </div>
       }
     >
       <div className="max-h-[60vh] overflow-y-auto -mx-1">

@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 
 ROOT_DIR = Path(__file__).parent
@@ -24,6 +25,7 @@ from gcs.command_log import CommandLogStore
 from gcs.db import close_db
 from gcs.drone_manager import DroneManager
 from gcs.mission_manager import MissionManager
+from gcs.kml_parser import parse_kml_content, parse_kmz_file
 from gcs.models import (
     CommandLog,
     CommandRequest,
@@ -194,6 +196,29 @@ async def disconnect_drone(drone_id: str):
     return await drone_manager.disconnect(drone_id)
 
 
+class HardwareFCConnectPayload(BaseModel):
+    port: str = "COM3"
+    baud_rate: int = 115200
+    name: str = "Hardware FC Drone"
+
+
+@api.post("/drones/connect-hardware-fc", response_model=Drone)
+async def connect_hardware_fc(payload: HardwareFCConnectPayload):
+    """Add and connect a physical Flight Controller connected via Serial/USB/Bluetooth."""
+    drone_payload = DroneCreate(
+        name=payload.name,
+        connection=ConnectionProfile(
+            connection_type="serial",
+            address=payload.port,
+            baud_rate=payload.baud_rate,
+            auto_reconnect=True,
+        )
+    )
+    drone = await drone_manager.add_drone(drone_payload)
+    connected_drone = await drone_manager.connect(drone.id)
+    return connected_drone
+
+
 # ---------------------------------------------------------------------------
 # REST – Commands
 # ---------------------------------------------------------------------------
@@ -292,6 +317,139 @@ async def duplicate_mission(mid: str):
     if not m:
         raise HTTPException(404, "Mission not found")
     return m
+
+
+@api.post("/missions/import-kml", response_model=Mission)
+async def import_kml_mission(file: UploadFile = File(...)):
+    """Import a .kml or .kmz file, parse waypoints, create and save mission."""
+    filename = file.filename or "uploaded.kml"
+    content = await file.read()
+    try:
+        if filename.lower().endswith(".kmz"):
+            mission_create = parse_kmz_file(content)
+        else:
+            kml_text = content.decode("utf-8", errors="ignore")
+            mission_create = parse_kml_content(kml_text)
+        if not mission_create.name or mission_create.name == "Imported KML Mission":
+            mission_create.name = Path(filename).stem.replace("_", " ").title()
+        return await mission_manager.create(mission_create)
+    except Exception as e:
+        logger.error("KML import failed: %s", e)
+        raise HTTPException(400, detail=f"Invalid KML file: {str(e)}")
+
+
+@api.post("/missions/auto-load-kml")
+async def auto_load_kml_from_folder(folder_path: str = r"C:\Users\ASUS\Desktop\AetherGCS"):
+    """Scan folder for any .kml/.kmz files and automatically create missions in GCS."""
+    target_dir = Path(folder_path)
+    if not target_dir.exists():
+        raise HTTPException(404, detail=f"Folder not found: {folder_path}")
+
+    loaded_missions = []
+    kml_files = list(target_dir.glob("*.kml")) + list(target_dir.glob("*.kmz"))
+    
+    for kml_file in kml_files:
+        try:
+            if kml_file.suffix.lower() == ".kmz":
+                mission_create = parse_kmz_file(kml_file.read_bytes())
+            else:
+                mission_create = parse_kml_content(kml_file.read_text(encoding="utf-8", errors="ignore"))
+            
+            if not mission_create.name or mission_create.name == "Imported KML Mission":
+                mission_create.name = kml_file.stem.replace("_", " ").title()
+                
+            m = await mission_manager.create(mission_create)
+            loaded_missions.append(m)
+        except Exception as e:
+            logger.warning("Failed to parse %s: %s", kml_file.name, e)
+
+    return {"ok": True, "count": len(loaded_missions), "missions": loaded_missions}
+
+
+@api.post("/missions/{mid}/auto-execute")
+async def auto_execute_mission(mid: str):
+    """Automatically upload mission waypoints to connected FC or SITL simulator drone, arm, and start mission."""
+    mission = await mission_manager.get(mid)
+    if not mission:
+        raise HTTPException(404, "Mission not found")
+
+    drones = drone_manager.list_drones()
+    target_drone = None
+    for d in drones:
+        if d.status == "connected":
+            target_drone = d
+            break
+
+    if not target_drone:
+        # Check if hardware FC serial port is available on host system
+        try:
+            import serial.tools.list_ports
+            com_ports = [p.device for p in serial.tools.list_ports.comports()]
+        except Exception:
+            com_ports = []
+
+        if com_ports:
+            hw_port = com_ports[0]
+            fc_drone_payload = DroneCreate(
+                name=f"Hardware FC ({hw_port})",
+                connection=ConnectionProfile(
+                    connection_type="serial",
+                    address=hw_port,
+                    baud_rate=115200,
+                    auto_reconnect=True,
+                )
+            )
+            try:
+                hw_drone = await drone_manager.add_drone(fc_drone_payload)
+                hw_drone = await drone_manager.connect(hw_drone.id)
+                # Wait up to 1.5s for heartbeat if hardware FC is live
+                for _ in range(15):
+                    latest_d = drone_manager.get_drone(hw_drone.id)
+                    if latest_d and latest_d.status == "connected":
+                        target_drone = latest_d
+                        logger.info("Connected to Hardware Flight Controller on %s", hw_port)
+                        break
+                    await asyncio.sleep(0.1)
+            except Exception as fc_err:
+                logger.warning("Hardware FC connection on %s failed: %s", hw_port, fc_err)
+
+        if not target_drone:
+            # Fall back to active simulator drone
+            first_lat = mission.waypoints[0].latitude if mission.waypoints else 28.6751
+            first_lon = mission.waypoints[0].longitude if mission.waypoints else 77.5023
+            new_drone_payload = DroneCreate(
+                name="AeroForge Survey UAV-1",
+                home_lat=first_lat,
+                home_lon=first_lon,
+                connection=ConnectionProfile(connection_type="simulator")
+            )
+            target_drone = await drone_manager.add_drone(new_drone_payload)
+            target_drone = await drone_manager.connect(target_drone.id)
+
+    did = target_drone.id
+    cmd_status = "MISSION_STARTED"
+    err_msg = None
+
+    try:
+        await drone_manager.send_command([did], "upload_mission", {"waypoints": [w.model_dump() for w in mission.waypoints]})
+        await asyncio.sleep(0.3)
+        await drone_manager.send_command([did], "arm", {})
+        await asyncio.sleep(0.3)
+        await drone_manager.send_command([did], "start_mission", {})
+    except Exception as cmd_err:
+        logger.warning("Command execution warning for drone %s: %s", did, cmd_err)
+        cmd_status = "MISSION_LOADED_FC_WAITING"
+        err_msg = str(cmd_err)
+
+    return {
+        "ok": True,
+        "drone_id": did,
+        "drone_name": target_drone.name,
+        "mission_id": mid,
+        "status": cmd_status,
+        "waypoints_count": len(mission.waypoints),
+        "note": err_msg or "Mission uploaded successfully."
+    }
 
 
 # ---------------------------------------------------------------------------
