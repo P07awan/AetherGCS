@@ -32,35 +32,50 @@ const MAP_PROVIDERS = {
   },
 };
 
-// Quadcopter Drone Icon with rotors and directional heading
-const quadcopterIcon = (heading, selected, armed) =>
-  L.divIcon({
+// Quadcopter Drone Icon with rotors, directional heading, and situational callout tag
+const quadcopterIcon = (heading, selected, armed, name = "", alt = null) => {
+  const altText = alt != null ? `${alt.toFixed(1)}m` : "";
+  const labelHtml = name
+    ? `<div class="absolute top-9 left-1/2 -translate-x-1/2 whitespace-nowrap px-1.5 py-0.5 rounded text-[9px] font-mono font-bold shadow-lg pointer-events-none transition-all ${
+        selected
+          ? "bg-zinc-950/90 text-[#FFB000] border border-[#FFB000]"
+          : "bg-zinc-900/85 text-zinc-200 border border-zinc-700"
+      }">
+        ${name}${altText ? ` · <span class="${armed ? "text-[#00FF41]" : "text-zinc-400"}">${altText}</span>` : ""}
+      </div>`
+    : "";
+
+  return L.divIcon({
     className: "",
     iconSize: [36, 36],
     iconAnchor: [18, 18],
-    html: `<div class="relative w-9 h-9 flex items-center justify-center transition-transform duration-75" style="transform: rotate(${heading}deg)">
-      ${renderToStaticMarkup(
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-        {/* Quadcopter X Frame */}
-        <line x1="6" y1="6" x2="26" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
-        <line x1="26" y1="6" x2="6" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
+    html: `<div class="relative w-9 h-9 flex items-center justify-center">
+      <div class="w-9 h-9 flex items-center justify-center transition-transform duration-75" style="transform: rotate(${heading}deg)">
+        ${renderToStaticMarkup(
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            {/* Quadcopter X Frame */}
+            <line x1="6" y1="6" x2="26" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
+            <line x1="26" y1="6" x2="6" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
 
-        {/* 4 Rotors */}
-        <circle cx="6" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-        <circle cx="26" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-        <circle cx="6" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-        <circle cx="26" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+            {/* 4 Rotors */}
+            <circle cx="6" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+            <circle cx="26" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+            <circle cx="6" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
+            <circle cx="26" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
 
-        {/* Forward Nose Direction Arrow */}
-        <path d="M16 2 L21 14 L16 11 L11 14 Z" fill={selected ? "#FFB000" : "#00F0FF"} stroke="#000" strokeWidth="1" />
+            {/* Forward Nose Direction Arrow */}
+            <path d="M16 2 L21 14 L16 11 L11 14 Z" fill={selected ? "#FFB000" : "#00F0FF"} stroke="#000" strokeWidth="1" />
 
-        {/* Center Body Core */}
-        <circle cx="16" cy="16" r="4.5" fill="#111" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="1.5" />
-        <circle cx="16" cy="16" r="1.5" fill={selected ? "#FFB000" : "#00F0FF"} />
-      </svg>
-    )}
+            {/* Center Body Core */}
+            <circle cx="16" cy="16" r="4.5" fill="#111" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="1.5" />
+            <circle cx="16" cy="16" r="1.5" fill={selected ? "#FFB000" : "#00F0FF"} />
+          </svg>
+        )}
+      </div>
+      ${labelHtml}
     </div>`,
   });
+};
 
 const homeIcon = L.divIcon({
   className: "",
@@ -76,13 +91,30 @@ const userIcon = L.divIcon({
   html: `<div class="user-marker"><div class="user-marker-dot"></div></div>`,
 });
 
-const waypointIcon = (seq) =>
-  L.divIcon({
+const waypointIcon = (seq, action = "waypoint") => {
+  let badge = `${seq + 1}`;
+  let bg = "#FFB000";
+  let color = "#000";
+  if (action === "takeoff") {
+    badge = `T${seq + 1}`;
+    bg = "#10B981";
+    color = "#000";
+  } else if (action === "land") {
+    badge = `L${seq + 1}`;
+    bg = "#F97316";
+    color = "#000";
+  } else if (action === "rtl") {
+    badge = `R${seq + 1}`;
+    bg = "#00F0FF";
+    color = "#000";
+  }
+  return L.divIcon({
     className: "",
     iconSize: [24, 24],
     iconAnchor: [12, 12],
-    html: `<div class="waypoint-marker">${seq + 1}</div>`,
+    html: `<div style="background-color:${bg};color:${color};width:24px;height:24px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-family:monospace;font-weight:bold;font-size:10px;box-shadow:0 2px 4px rgba(0,0,0,0.5);border:1px solid #000;">${badge}</div>`,
   });
+};
 
 function MapClickHandler({ onClick }) {
   useMapEvents({ click(e) { onClick && onClick(e); } });
@@ -149,7 +181,9 @@ export default function DroneMap() {
   const drones = useDroneList();
   const activeDrone = useActiveDrone();
   const activeId = useGCS((s) => s.activeDroneId);
+  const selectedIds = useGCS((s) => s.selectedDroneIds);
   const setActive = useGCS((s) => s.setActive);
+  const setSelected = useGCS((s) => s.setSelected);
   const draftWaypoints = useGCS((s) => s.draftMission.waypoints);
   const draftAlt = useGCS((s) => s.draftMission.default_altitude);
   const addWaypoint = useGCS((s) => s.addWaypoint);
@@ -343,12 +377,25 @@ export default function DroneMap() {
 
         {/* Drone Markers */}
         {drones.map((d) => (
-          <Marker
-            key={d.id}
-            position={[d.telemetry.latitude, d.telemetry.longitude]}
-            icon={quadcopterIcon(d.telemetry.heading, d.id === activeId, d.telemetry.armed)}
-            eventHandlers={{ click: () => setActive(d.id) }}
-          />
+          isValidCoord(d.telemetry?.latitude, d.telemetry?.longitude) && (
+            <Marker
+              key={d.id}
+              position={[d.telemetry.latitude, d.telemetry.longitude]}
+              icon={quadcopterIcon(
+                d.telemetry.heading,
+                d.id === activeId || selectedIds.includes(d.id),
+                d.telemetry.armed,
+                d.name,
+                d.telemetry.altitude_relative
+              )}
+              eventHandlers={{
+                click: () => {
+                  setActive(d.id);
+                  setSelected([d.id]);
+                },
+              }}
+            />
+          )
         ))}
 
         {/* Draft Mission Polyline */}
@@ -364,7 +411,7 @@ export default function DroneMap() {
           <Marker
             key={wp.seq}
             position={[wp.latitude, wp.longitude]}
-            icon={waypointIcon(wp.seq)}
+            icon={waypointIcon(wp.seq, wp.action)}
             draggable
             eventHandlers={{
               dragend: (e) => {

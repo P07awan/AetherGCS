@@ -53,8 +53,18 @@ const Field = ({ label, children }) => (
   </div>
 );
 
+const NATO_NAMES = [
+  "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+  "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima",
+  "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo",
+  "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"
+];
+
 export default function AddDroneDialog({ open, onOpenChange }) {
   const userLocation = useGCS((s) => s.userLocation);
+  const dronesMap = useGCS((s) => s.drones);
+  const droneList = Object.values(dronesMap);
+
   const [name, setName] = useState("Drone Alpha");
   const [sysId, setSysId] = useState(1);
   const [type, setType] = useState("serial");
@@ -72,6 +82,39 @@ export default function AddDroneDialog({ open, onOpenChange }) {
   // Real system serial port scanning
   const [detectedPorts, setDetectedPorts] = useState([]);
   const [scanningPorts, setScanningPorts] = useState(false);
+
+  // Initialize unique name and system ID on open
+  useEffect(() => {
+    if (open) {
+      const existingNames = new Set(droneList.map((d) => d.name));
+      const existingSysIds = droneList.map((d) => d.system_id).filter((n) => typeof n === "number");
+      const nextSysId = existingSysIds.length > 0 ? Math.max(...existingSysIds) + 1 : 1;
+      setSysId(nextSysId);
+
+      const nextName = NATO_NAMES.map((n) => `Drone ${n}`).find((n) => !existingNames.has(n))
+        || `Drone ${droneList.length + 1}`;
+      setName(nextName);
+
+      // Auto-increment UDP port if 14550 is used
+      if (type === "udp") {
+        const nextUdp = 14550 + droneList.length;
+        setUdpPort(nextUdp);
+      }
+
+      if (!homeTouched) {
+        let baseLat = userLocation?.lat ?? 37.7749;
+        let baseLon = userLocation?.lon ?? -122.4194;
+        if (droneList.length > 0) {
+          const cosLat = Math.cos((baseLat * Math.PI) / 180) || 1.0;
+          const dlon = (20.0 * droneList.length) / (111139.0 * cosLat);
+          baseLon += dlon;
+        }
+        setHomeLat(Number(baseLat.toFixed(6)));
+        setHomeLon(Number(baseLon.toFixed(6)));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const scanPorts = useCallback(async () => {
     setScanningPorts(true);
@@ -94,21 +137,27 @@ export default function AddDroneDialog({ open, onOpenChange }) {
     }
   }, [open, type, scanPorts]);
 
-  // Auto-fill home from user's live GPS while unchanged
+  // Auto-fill home from user's live GPS while unchanged if single drone
   useEffect(() => {
-    if (userLocation && !homeTouched) {
+    if (userLocation && !homeTouched && droneList.length === 0) {
       setHomeLat(Number(userLocation.lat.toFixed(6)));
       setHomeLon(Number(userLocation.lon.toFixed(6)));
     }
-  }, [userLocation, homeTouched]);
+  }, [userLocation, homeTouched, droneList.length]);
 
   const useMyLocation = () => {
     if (!userLocation) return toast.error("GPS not available yet");
+    let baseLon = userLocation.lon;
+    if (droneList.length > 0) {
+      const cosLat = Math.cos((userLocation.lat * Math.PI) / 180) || 1.0;
+      baseLon += (20.0 * droneList.length) / (111139.0 * cosLat);
+    }
     setHomeLat(Number(userLocation.lat.toFixed(6)));
-    setHomeLon(Number(userLocation.lon.toFixed(6)));
-    setHomeTouched(false);
-    toast.success("Home set to your current location");
+    setHomeLon(Number(baseLon.toFixed(6)));
+    setHomeTouched(true);
+    toast.success("Home set to your current location (with fleet offset)");
   };
+
 
   const applyPreset = (p) => {
     const c = p.conf;
@@ -128,6 +177,9 @@ export default function AddDroneDialog({ open, onOpenChange }) {
   const submit = async () => {
     if (!name.trim()) return toast.error("Name required");
     if (type === "serial" && !serialPort.trim()) return toast.error("Serial port path required (e.g. COM3 or /dev/ttyUSB0)");
+    if (type !== "simulator" && !userLocation && !homeTouched) {
+      return toast.error("Laptop GPS location is required before adding a real drone");
+    }
     
     setBusy(true);
     try {

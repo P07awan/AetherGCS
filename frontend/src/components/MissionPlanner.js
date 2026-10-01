@@ -188,14 +188,29 @@ export default function MissionPlanner() {
                   <td className="px-3 py-1.5">
                     <select
                       data-testid={`wp-action-${wp.seq}`}
-                      value={wp.action}
-                      onChange={(e) => updateWaypoint(wp.seq, { action: e.target.value })}
-                      className="bg-transparent border border-zinc-800 text-zinc-200 text-xs rounded-none focus:outline-none focus:border-[#FFB000]"
+                      value={wp.action || "waypoint"}
+                      onChange={(e) => {
+                        const newAction = e.target.value;
+                        const patch = { action: newAction };
+                        if (newAction === "land") {
+                          patch.altitude = 0;
+                        }
+                        updateWaypoint(wp.seq, patch);
+                      }}
+                      className={`border text-xs rounded px-1.5 py-0.5 focus:outline-none focus:border-[#FFB000] cursor-pointer font-mono font-bold ${
+                        wp.action === "takeoff"
+                          ? "bg-emerald-950/80 border-emerald-500/80 text-emerald-400"
+                          : wp.action === "land"
+                          ? "bg-amber-950/80 border-amber-500/80 text-amber-400"
+                          : wp.action === "rtl"
+                          ? "bg-cyan-950/80 border-cyan-500/80 text-cyan-400"
+                          : "bg-zinc-900 border-zinc-700 text-zinc-200"
+                      }`}
                     >
-                      <option value="waypoint">Waypoint</option>
-                      <option value="takeoff">Takeoff</option>
-                      <option value="land">Land</option>
-                      <option value="rtl">RTL</option>
+                      <option value="waypoint" className="bg-zinc-900 text-zinc-200">Waypoint</option>
+                      <option value="takeoff" className="bg-zinc-900 text-emerald-400 font-bold">Takeoff</option>
+                      <option value="land" className="bg-zinc-900 text-amber-400 font-bold">Land</option>
+                      <option value="rtl" className="bg-zinc-900 text-cyan-400 font-bold">RTL</option>
                     </select>
                   </td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{wp.latitude.toFixed(6)}</td>

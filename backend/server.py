@@ -203,30 +203,34 @@ async def send_command(req: CommandRequest):
     if not ids:
         raise HTTPException(400, "drone_ids required")
 
+    start = time.time()
+    err_detail = None
+    results = []
+    try:
+        results = await drone_manager.send_command(ids, req.command, req.params)
+    except Exception as e:  # noqa: BLE001
+        err_detail = str(e)
+
+    elapsed = int((time.time() - start) * 1000)
+    results_map = {r["drone_id"]: r for r in results}
+
     logs: list[CommandLog] = []
     for did in ids:
         d = drone_manager.get_drone(did)
         if not d:
             continue
+        res = results_map.get(did)
+        is_ok = res["ok"] if res else (err_detail is None)
+        err = res.get("error") if res else err_detail
         logs.append(CommandLog(
-            drone_id=did, drone_name=d.name, command=req.command, params=req.params, status="sent"
+            drone_id=did,
+            drone_name=d.name,
+            command=req.command,
+            params=req.params,
+            status="success" if is_ok else "failed",
+            error=err,
+            response_ms=elapsed,
         ))
-
-    start = time.time()
-    err_detail = None
-    try:
-        await drone_manager.send_command(ids, req.command, req.params)
-        elapsed = int((time.time() - start) * 1000)
-        for lg in logs:
-            lg.status = "success"
-            lg.response_ms = elapsed
-    except Exception as e:  # noqa: BLE001
-        err_detail = str(e)
-        elapsed = int((time.time() - start) * 1000)
-        for lg in logs:
-            lg.status = "failed"
-            lg.error = err_detail
-            lg.response_ms = elapsed
 
     for lg in logs:
         await command_log.add(lg)
@@ -235,7 +239,7 @@ async def send_command(req: CommandRequest):
     if err_detail:
         raise HTTPException(400, detail=err_detail)
 
-    return {"ok": True, "count": len(logs)}
+    return {"ok": True, "count": len(logs), "results": results}
 
 
 @api.get("/history", response_model=List[CommandLog])
