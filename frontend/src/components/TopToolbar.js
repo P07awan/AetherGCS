@@ -254,28 +254,33 @@ export default function TopToolbar() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
 
-  // Determine target drone IDs
-  const targetIds = () => {
-    if (selected.length > 0) return selected.map((d) => d.id);
-    if (activeId) return [activeId];
-    return [];
-  };
+  // Determine target drones
+  const targetDrones = selected.length > 0
+    ? selected
+    : activeId && drones[activeId] ? [drones[activeId]] : [];
 
-  // Get the primary drone's state for button gating
-  const primaryDrone = selected.length > 0
-    ? selected[0]
-    : activeId ? drones[activeId] : null;
+  const targetIds = () => targetDrones.map((d) => d.id);
 
+  // Multi-drone state evaluation
+  const anyConnected = targetDrones.some((d) => d.status === "connected");
+  const anyArmed = targetDrones.some((d) => d.status === "connected" && d.telemetry?.armed);
+  const anyDisarmed = targetDrones.some((d) => d.status === "connected" && !d.telemetry?.armed);
+  const anyAirborne = targetDrones.some((d) => d.status === "connected" && d.telemetry?.armed && isAirborne(getFlightState(d)));
+  const anyCanTakeoff = targetDrones.some((d) => d.status === "connected" && d.telemetry?.armed && !isAirborne(getFlightState(d)));
+  const anyArming = targetDrones.some((d) => getFlightState(d) === "ARMING");
+
+  // Primary drone (used for single drone mode selector and fallback display)
+  const primaryDrone = targetDrones[0] || null;
   const flightState = getFlightState(primaryDrone);
-  const isConnected = primaryDrone?.status === "connected";
-  const isArmed = primaryDrone?.telemetry?.armed === true;
-  const isDroneAirborne = isAirborne(flightState);
   const currentMode = primaryDrone?.telemetry?.flight_mode || "";
-  // Allow LAND whenever armed and drone has left the ground (or is trying to)
-  const canLand = isConnected && isArmed && isDroneAirborne;
-  // Allow TAKEOFF when connected, armed, NOT already airborne, and not already in a takeoff sequence
-  const isTakingOff = ["TAKING_OFF", "TAKEOFF_REQUESTED"].includes(flightState);
-  const canTakeoff = isConnected && isArmed && !isDroneAirborne && !isTakingOff;
+
+  // Button gating for single and multi drone
+  const canArm = anyConnected && anyDisarmed && !anyArming;
+  const canDisarm = anyConnected && anyArmed;
+  const canTakeoff = anyCanTakeoff;
+  const canLand = anyAirborne;
+  const isConnected = anyConnected;
+  const isArmed = anyArmed;
 
   // Generic command runner
   const run = async (cmd, params = {}, label = cmd, danger = false) => {
@@ -321,8 +326,8 @@ export default function TopToolbar() {
   const handleTakeoff = async (altitude) => {
     const ids = targetIds();
     if (ids.length === 0) return toast.error("Select at least one drone");
-    if (!isArmed) {
-      toast.error("TAKEOFF BLOCKED — Drone is not armed. Click ARM first.");
+    if (!anyArmed) {
+      toast.error("TAKEOFF BLOCKED — No target drone is armed. Click ARM first.");
       return;
     }
     try {
@@ -454,11 +459,23 @@ export default function TopToolbar() {
       <div className="h-8 w-px bg-zinc-700 mx-1" />
 
       {/* Flight state indicator */}
-      {isConnected && (
+      {targetDrones.length === 1 && anyConnected && (
         <div className="flex flex-col items-center px-2 min-w-[64px]">
-          <span className="font-mono text-[9px] text-zinc-500 uppercase leading-none">STATE</span>
+          <span className="font-mono text-[9px] text-zinc-500 uppercase leading-none">
+            {primaryDrone.name}
+          </span>
           <span className={`font-mono text-[10px] font-bold leading-tight ${stateColors[flightState] || "text-zinc-300"}`}>
             {flightState.replace(/_/g, " ")}
+          </span>
+        </div>
+      )}
+      {targetDrones.length > 1 && (
+        <div className="flex flex-col items-center px-2 min-w-[80px] bg-zinc-800/80 border border-zinc-700 rounded-xs py-0.5">
+          <span className="font-mono text-[9px] text-amber-400 font-bold uppercase leading-none">
+            SWARM // {targetDrones.length}
+          </span>
+          <span className="font-mono text-[9px] text-zinc-300 leading-tight">
+            {targetDrones.filter((d) => isAirborne(getFlightState(d))).length} Air · {targetDrones.filter((d) => d.telemetry?.armed).length} Arm
           </span>
         </div>
       )}
@@ -467,19 +484,19 @@ export default function TopToolbar() {
       <FlightModeSelector
         currentMode={currentMode}
         onSetMode={handleSetMode}
-        disabled={!isConnected}
+        disabled={!anyConnected}
       />
 
       <div className="h-8 w-px bg-zinc-700 mx-1" />
 
-      {/* ARM / DISARM — mutually exclusive based on armed state */}
+      {/* ARM / DISARM */}
       <IconBtn
         label="Arm"
         testid="btn-arm"
         onClick={handleArm}
         variant="green"
-        disabled={!isConnected || isArmed || flightState === "ARMING"}
-        title={isArmed ? "Already armed" : flightState === "ARMING" ? "Arming in progress..." : "ARM the drone"}
+        disabled={!canArm}
+        title={!canArm ? (anyArmed ? "Target drones are already armed" : "Drone not connected") : "ARM the target drone(s)"}
       >
         <Radio className="w-4 h-4" />
       </IconBtn>
@@ -488,11 +505,11 @@ export default function TopToolbar() {
         testid="btn-disarm"
         onClick={handleDisarm}
         variant="default"
-        disabled={!isConnected || !isArmed}
+        disabled={!canDisarm}
         title={
-          !isArmed ? "Already disarmed" :
-          isDroneAirborne ? "⚠️ Drone is airborne — LAND first, then Disarm" :
-          "DISARM the drone"
+          !canDisarm ? "No target drone is armed" :
+          anyAirborne ? "⚠️ Airborne drone detected — LAND first, then Disarm" :
+          "DISARM the target drone(s)"
         }
       >
         <Radio className="w-4 h-4" />
@@ -500,31 +517,31 @@ export default function TopToolbar() {
 
       <div className="h-8 w-px bg-zinc-700 mx-1" />
 
-      {/* TAKEOFF with altitude picker — disabled when not armed or already airborne */}
+      {/* TAKEOFF with altitude picker */}
       <TakeoffControl
-        armed={isArmed}
+        armed={anyArmed}
         onTakeoff={handleTakeoff}
         disabled={!canTakeoff}
       />
 
-      {/* LAND — enabled whenever drone is armed and in the air */}
+      {/* LAND */}
       <IconBtn
         label="Land"
         testid="btn-land"
         onClick={handleLand}
         disabled={!canLand}
-        title={canLand ? "Land at current position" : isArmed ? "Drone not airborne" : "Drone not armed"}
+        title={canLand ? "Land target drone(s)" : "No target drone is airborne"}
       >
         <ArrowDownToDot className="w-4 h-4" />
       </IconBtn>
 
-      {/* HOLD / RTL — only useful when armed */}
+      {/* HOLD / RTL */}
       <IconBtn
         label="Hold"
         testid="btn-hold"
         onClick={() => run("hold", {}, "Hold")}
-        disabled={!isConnected || !isArmed}
-        title={!isArmed ? "Arm the drone first" : "Hold current GPS position (LOITER)"}
+        disabled={!anyConnected || !anyArmed}
+        title={!anyArmed ? "Arm target drone(s) first" : "Hold current GPS position (LOITER)"}
       >
         <Hand className="w-4 h-4" />
       </IconBtn>
@@ -532,8 +549,8 @@ export default function TopToolbar() {
         label="RTL"
         testid="btn-rtl"
         onClick={() => run("rtl", {}, "RTL")}
-        disabled={!isConnected || !isArmed}
-        title={!isArmed ? "Arm the drone first" : "Return to launch point and land"}
+        disabled={!anyConnected || !anyArmed}
+        title={!anyArmed ? "Arm target drone(s) first" : "Return to launch point and land"}
       >
         <Home className="w-4 h-4" />
       </IconBtn>

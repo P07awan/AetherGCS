@@ -250,7 +250,8 @@ class SimulatorWorker(DroneWorker):
         if self.drone.status != "connected":
             await self.connect()
         if self.drone.telemetry.armed:
-            raise RuntimeError("Drone is already armed.")
+            logger.info("Drone %s already armed", self.drone.name)
+            return
         self.drone.telemetry.flight_state = "ARMING"
         self.on_update(self.drone)
         # Simulate a brief arming delay (like waiting for ACK)
@@ -261,6 +262,10 @@ class SimulatorWorker(DroneWorker):
         self.on_update(self.drone)
 
     async def disarm(self) -> None:
+        if not self.drone.telemetry.armed:
+            self.drone.telemetry.flight_state = "DISARMED"
+            self.on_update(self.drone)
+            return
         alt = self.drone.telemetry.altitude_relative or 0.0
         if alt > 0.5:
             raise RuntimeError(
@@ -271,6 +276,7 @@ class SimulatorWorker(DroneWorker):
         self._velocity_body = [0.0, 0.0, 0.0]
         self._yaw_rate = 0.0
         self._mission_running = False
+        self._rtl_active = False
         self.drone.telemetry.flight_state = "DISARMED"
         self.on_update(self.drone)
 
@@ -283,17 +289,31 @@ class SimulatorWorker(DroneWorker):
             raise RuntimeError(
                 f"Requested altitude {altitude:.1f}m exceeds safety limit of {MAX_TAKEOFF_ALTITUDE}m."
             )
-        self.drone.telemetry.flight_state = "TAKEOFF_REQUESTED"
-        self.drone.telemetry.flight_mode = "GUIDED"
-        self._velocity_body = [0.0, 0.0, 2.0]
         self._takeoff_target = altitude
-        self.drone.telemetry.flight_state = "TAKING_OFF"
+        self.drone.telemetry.flight_mode = "GUIDED"
+        curr_alt = self.drone.telemetry.altitude_relative or 0.0
+        if curr_alt < altitude - 0.5:
+            self._velocity_body = [0.0, 0.0, 2.0]
+            self.drone.telemetry.flight_state = "TAKING_OFF"
+        elif curr_alt > altitude + 0.5:
+            self._velocity_body = [0.0, 0.0, -1.5]
+            self.drone.telemetry.flight_state = "AIRBORNE"
+        else:
+            self._velocity_body[2] = 0.0
+            self.drone.telemetry.flight_mode = "LOITER"
+            self.drone.telemetry.flight_state = "AIRBORNE"
         self.on_update(self.drone)
 
     async def land(self) -> None:
+        if not self.drone.telemetry.armed:
+            self.drone.telemetry.flight_state = "DISARMED"
+            self.on_update(self.drone)
+            return
         self.drone.telemetry.flight_mode = "LAND"
         self._velocity_body = [0.0, 0.0, -1.5]
         self._yaw_rate = 0.0
+        self._mission_running = False
+        self._rtl_active = False
         self.drone.telemetry.flight_state = "LANDING"
         self.on_update(self.drone)
 
@@ -317,6 +337,7 @@ class SimulatorWorker(DroneWorker):
         self._velocity_body = [0.0, 0.0, 0.0]
         self._yaw_rate = 0.0
         self._mission_running = False
+        self._rtl_active = False
         self.drone.telemetry.flight_mode = "MANUAL"
         self.drone.telemetry.flight_state = "DISARMED"
         self.on_update(self.drone)
@@ -330,6 +351,8 @@ class SimulatorWorker(DroneWorker):
         self._yaw_rate = yaw_rate
         if self.drone.telemetry.flight_mode not in ("GUIDED", "LOITER"):
             self.drone.telemetry.flight_mode = "GUIDED"
+        if self.drone.telemetry.altitude_relative > 0.5 and self.drone.telemetry.flight_state != "MISSION_ACTIVE":
+            self.drone.telemetry.flight_state = "AIRBORNE"
         self.on_update(self.drone)
 
     # ---- missions ----------------------------------------------------------
@@ -389,6 +412,13 @@ class SimulatorWorker(DroneWorker):
             self._velocity_body = [0.0, 0.0, -1.5]
             self._yaw_rate = 0.0
             self.drone.telemetry.flight_state = "LANDING"
+        if m == "RTL":
+            self._mission_running = False
+            self._rtl_active = True
+        if m == "AUTO" and self._mission and self.drone.telemetry.armed:
+            self._mission_running = True
+            self._mission_paused = False
+            self.drone.telemetry.flight_state = "MISSION_ACTIVE"
         self.on_update(self.drone)
         logger.info("Simulator %s mode → %s", self.drone.id, m)
 
@@ -422,17 +452,46 @@ class SimulatorWorker(DroneWorker):
                 t.flight_mode = "LOITER"
             else:
                 wp = self._mission[self._mission_index]
-                dist, brng = _bearing_meters(t.latitude, t.longitude, wp.latitude, wp.longitude)
-                t.heading = brng
+                action = (getattr(wp, "action", "waypoint") or "waypoint").lower()
                 cruise_speed = 8.0
-                if dist < 3.0 and abs(t.altitude_relative - wp.altitude) < 1.5:
-                    self._mission_index += 1
-                else:
-                    self._velocity_body = [
-                        min(cruise_speed, max(dist * 0.5, 1.0)),
-                        0.0,
-                        max(-2.0, min(2.0, (wp.altitude - t.altitude_relative) * 0.8)),
-                    ]
+
+                if action == "rtl":
+                    self._mission_running = False
+                    t.flight_mode = "RTL"
+                    self._rtl_active = True
+                elif action == "land":
+                    dist, brng = _bearing_meters(t.latitude, t.longitude, wp.latitude, wp.longitude)
+                    t.heading = brng
+                    if dist < 3.0:
+                        self._mission_running = False
+                        t.flight_mode = "LAND"
+                        self._velocity_body = [0.0, 0.0, -1.5]
+                        t.flight_state = "LANDING"
+                    else:
+                        self._velocity_body = [
+                            min(cruise_speed, max(dist * 0.5, 1.0)),
+                            0.0,
+                            max(-2.0, min(2.0, (wp.altitude - t.altitude_relative) * 0.8)),
+                        ]
+                elif action == "takeoff":
+                    if t.altitude_relative < wp.altitude - 0.5:
+                        self._velocity_body = [0.0, 0.0, 1.5]
+                        t.flight_state = "TAKING_OFF"
+                    else:
+                        self._velocity_body[2] = 0.0
+                        t.flight_state = "AIRBORNE"
+                        self._mission_index += 1
+                else:  # waypoint
+                    dist, brng = _bearing_meters(t.latitude, t.longitude, wp.latitude, wp.longitude)
+                    t.heading = brng
+                    if dist < 3.0 and abs(t.altitude_relative - wp.altitude) < 1.5:
+                        self._mission_index += 1
+                    else:
+                        self._velocity_body = [
+                            min(cruise_speed, max(dist * 0.5, 1.0)),
+                            0.0,
+                            max(-2.0, min(2.0, (wp.altitude - t.altitude_relative) * 0.8)),
+                        ]
 
         # RTL autopilot
         if t.flight_mode == "RTL":
@@ -442,14 +501,14 @@ class SimulatorWorker(DroneWorker):
                 t.flight_mode = "LAND"
                 self._velocity_body = [0.0, 0.0, -1.5]
             else:
-                self._velocity_body = [min(8.0, dist * 0.5), 0.0, 0.0]
+                up_v = 1.5 if t.altitude_relative < 15.0 else 0.0
+                self._velocity_body = [min(8.0, max(dist * 0.5, 1.0)), 0.0, up_v]
 
         # takeoff auto-level: stop climbing and transition to AIRBORNE
-        if t.altitude_relative >= self._takeoff_target and t.flight_mode == "GUIDED":
+        if t.flight_state == "TAKING_OFF" and t.altitude_relative >= self._takeoff_target:
             self._velocity_body[2] = 0.0
             t.flight_mode = "LOITER"
-            if t.flight_state == "TAKING_OFF":
-                t.flight_state = "AIRBORNE"
+            t.flight_state = "AIRBORNE"
 
         t.heading = (t.heading + self._yaw_rate * dt) % 360.0
 
@@ -469,6 +528,7 @@ class SimulatorWorker(DroneWorker):
                 t.altitude_relative = 0.0
                 t.armed = False
                 self._velocity_body = [0.0, 0.0, 0.0]
+                self._rtl_active = False
                 t.flight_mode = "STABILIZE"
                 _update_flight_state_from_telemetry(t)  # → DISARMED
 
@@ -527,10 +587,6 @@ class MavlinkWorker(DroneWorker):
         self._ack_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         # Last STATUSTEXT lines (ring buffer) — captures pre-arm check failures
         self._recent_statustext: list[str] = []
-
-        d = self.drone
-        d.telemetry.latitude = d.home_lat
-        d.telemetry.longitude = d.home_lon
 
     # ---- connection string -------------------------------------------------
     def _connection_string(self) -> str:
@@ -861,9 +917,10 @@ class MavlinkWorker(DroneWorker):
             self.on_update(self.drone)
 
         elif typ == "HOME_POSITION":
-            self.drone.home_lat = msg.latitude / 1e7
-            self.drone.home_lon = msg.longitude / 1e7
-            self.drone.home_alt = msg.altitude / 1000.0
+            # The GCS home is the operator's live system location captured
+            # when the drone is added. Do not replace it with the autopilot's
+            # home position; the drone's current position comes from GPS
+            # telemetry (GLOBAL_POSITION_INT/GPS_RAW_INT).
             self.on_update(self.drone)
 
         elif typ == "ATTITUDE":
@@ -1071,6 +1128,9 @@ class MavlinkWorker(DroneWorker):
     async def arm(self) -> None:
         """ARM the drone. Waits for COMMAND_ACK and verifies heartbeat confirms armed==True."""
         self._require_mav()
+        if self.drone.telemetry.armed:
+            logger.info("Drone %s already armed", self.drone.name)
+            return
         loop = asyncio.get_running_loop()
         # Clear stale ACKs
         while not self._ack_queue.empty():
@@ -1264,10 +1324,22 @@ class MavlinkWorker(DroneWorker):
 
     async def rtl(self) -> None:
         self._require_mav()
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: self._set_mode("RTL")
-        )
-        logger.info("RTL sent to %s", self.drone.name)
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, lambda: self._set_mode("RTL")
+            )
+            logger.info("RTL mode set on %s", self.drone.name)
+        except Exception as mode_err:
+            logger.warning(
+                "set_mode(RTL) failed on %s (%s), trying MAV_CMD_NAV_RETURN_TO_LAUNCH",
+                self.drone.name, mode_err,
+            )
+            await loop.run_in_executor(
+                None,
+                lambda: self._send_command_long(20),  # MAV_CMD_NAV_RETURN_TO_LAUNCH
+            )
+            logger.info("MAV_CMD_NAV_RETURN_TO_LAUNCH sent to %s", self.drone.name)
 
     async def emergency_stop(self) -> None:
         self._require_mav()
@@ -1294,6 +1366,15 @@ class MavlinkWorker(DroneWorker):
         """Send SET_POSITION_TARGET_LOCAL_NED velocity command."""
         self._require_mav()
         from pymavlink import mavutil as _mu
+        loop = asyncio.get_running_loop()
+
+        # Velocity control in ArduPilot/PX4 requires GUIDED (or OFFBOARD) mode
+        if self.drone.telemetry.flight_mode not in ("GUIDED", "OFFBOARD"):
+            try:
+                await loop.run_in_executor(None, lambda: self._set_mode("GUIDED"))
+            except Exception:
+                pass
+
         # type_mask: bits 0-2 ignore position, bits 3-5 use velocity, bits 6-8 ignore accel,
         # bit 10 use yaw_rate. Value 0b110000111000 = 0x0FC7 (ignore pos+accel, use vel+yaw_rate)
         type_mask = 0x0FC7  # ignore pos (bits 0-2) + accel (bits 6-8), use vx/vy/vz + yaw_rate
@@ -1304,7 +1385,7 @@ class MavlinkWorker(DroneWorker):
         vy = forward * math.sin(hdg) + right * math.cos(hdg)  # East
         vz = -up  # NED: down is positive
 
-        await asyncio.get_running_loop().run_in_executor(
+        await loop.run_in_executor(
             None,
             lambda: self._mav.mav.set_position_target_local_ned_send(
                 0,  # time_boot_ms (ignored)
@@ -1323,14 +1404,43 @@ class MavlinkWorker(DroneWorker):
         """Set flight mode by name (ArduPilot or PX4)."""
         if self._mav is None:
             return
-        mode_id = self._mav.mode_mapping().get(mode_str)
+        mapping = self._mav.mode_mapping()
+        mode_id = None
+        if mapping:
+            mode_id = mapping.get(mode_str)
+            if mode_id is None:
+                # Try case-insensitive fallback
+                upper_mapping = {k.upper(): v for k, v in mapping.items()}
+                mode_id = upper_mapping.get(mode_str.upper())
+            if mode_id is None:
+                # Common aliases between ArduPilot and PX4
+                PX4_ALIASES = {
+                    "AUTO": "MISSION",
+                    "GUIDED": "OFFBOARD",
+                    "ALT_HOLD": "ALTCTL",
+                    "POSHOLD": "POSCTL",
+                    "STABILIZE": "STABILIZED",
+                }
+                alias = PX4_ALIASES.get(mode_str.upper())
+                if alias:
+                    mode_id = upper_mapping.get(alias)
+
         if mode_id is None:
-            # Try case-insensitive fallback
-            mapping = {k.upper(): v for k, v in self._mav.mode_mapping().items()}
-            mode_id = mapping.get(mode_str.upper())
-        if mode_id is None:
-            raise ValueError(f"Unknown flight mode: {mode_str}")
-        self._mav.set_mode(mode_id)
+            # If no mapping was found or mapping is unavailable, try passing the mode string directly
+            try:
+                self._mav.set_mode(mode_str.upper())
+                return
+            except Exception:
+                raise ValueError(f"Unknown flight mode: {mode_str}")
+
+        # In PX4, mode_id in px4_map is a 3-element tuple (base_mode, custom_main_mode, custom_sub_mode).
+        # pymavlink's set_mode(mode, custom_mode=0, custom_sub_mode=0) expects these unpacked.
+        # Passing a tuple directly puts the tuple into param1 of command_long_send, causing
+        # struct.error: required argument is not a float.
+        if isinstance(mode_id, (tuple, list)):
+            self._mav.set_mode(*mode_id)
+        else:
+            self._mav.set_mode(mode_id)
 
     # ---- mission upload ----------------------------------------------------
     async def upload_mission(self, waypoints: list[Waypoint]) -> None:
@@ -1339,10 +1449,85 @@ class MavlinkWorker(DroneWorker):
         loop = asyncio.get_running_loop()
         from pymavlink import mavutil as _mu
 
-        count = len(waypoints)
-        logger.info("Mission upload started")
-        logger.info(f"Mission contains {count} waypoints")
-        logger.info("Sending mission to vehicle")
+        # Determine items to upload.
+        # In MAVLink mission protocol (ArduPilot and PX4), sequence 0 is strictly the vehicle HOME position.
+        # Mission navigation in AUTO mode executes from item 1 onward.
+        items_to_send = []
+
+        # Item 0: Home position
+        home_lat = float(getattr(self.drone, "home_lat", 0.0) or self.drone.telemetry.latitude or 0.0)
+        home_lon = float(getattr(self.drone, "home_lon", 0.0) or self.drone.telemetry.longitude or 0.0)
+        home_alt = float(getattr(self.drone, "home_alt", 0.0) or 0.0)
+
+        items_to_send.append({
+            "command": _mu.mavlink.MAV_CMD_NAV_WAYPOINT,
+            "frame": _mu.mavlink.MAV_FRAME_GLOBAL,
+            "param1": 0.0,
+            "param2": 0.0,
+            "param3": 0.0,
+            "param4": 0.0,
+            "lat": home_lat,
+            "lon": home_lon,
+            "alt": home_alt,
+        })
+
+        for wp in waypoints:
+            action = (getattr(wp, "action", "waypoint") or "waypoint").lower()
+            if action == "takeoff":
+                cmd = _mu.mavlink.MAV_CMD_NAV_TAKEOFF
+                frame = _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                p1 = 0.0  # min pitch
+                p2 = 0.0
+                p3 = 0.0
+                p4 = float("nan")
+                alt = float(wp.altitude)
+                lat = float(wp.latitude)
+                lon = float(wp.longitude)
+            elif action == "land":
+                cmd = _mu.mavlink.MAV_CMD_NAV_LAND
+                frame = _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                p1 = 0.0  # abort altitude
+                p2 = 0.0  # precision landing mode
+                p3 = 0.0
+                p4 = float("nan")
+                alt = 0.0
+                lat = float(wp.latitude)
+                lon = float(wp.longitude)
+            elif action == "rtl":
+                cmd = _mu.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+                frame = _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                p1 = 0.0
+                p2 = 0.0
+                p3 = 0.0
+                p4 = 0.0
+                alt = 0.0
+                lat = 0.0
+                lon = 0.0
+            else:  # waypoint
+                cmd = _mu.mavlink.MAV_CMD_NAV_WAYPOINT
+                frame = _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                p1 = float(getattr(wp, "hold_seconds", 0.0) or 0.0)
+                p2 = float(getattr(wp, "acceptance_radius", 0.0) or 0.0)
+                p3 = 0.0
+                p4 = float("nan")
+                alt = float(wp.altitude)
+                lat = float(wp.latitude)
+                lon = float(wp.longitude)
+
+            items_to_send.append({
+                "command": cmd,
+                "frame": frame,
+                "param1": p1,
+                "param2": p2,
+                "param3": p3,
+                "param4": p4,
+                "lat": lat,
+                "lon": lon,
+                "alt": alt,
+            })
+
+        count = len(items_to_send)
+        logger.info("Mission upload started: sending %d items (home + %d waypoints)", count, len(waypoints))
 
         # Clear the queue of any stale messages
         while not self._mission_msg_queue.empty():
@@ -1368,32 +1553,55 @@ class MavlinkWorker(DroneWorker):
 
                 if msg.get_type() in ("MISSION_REQUEST", "MISSION_REQUEST_INT"):
                     seq = msg.seq
-                    if seq >= len(waypoints):
+                    if seq >= len(items_to_send):
                         raise RuntimeError(f"Drone requested invalid waypoint index {seq}")
-                    wp = waypoints[seq]
-                    await loop.run_in_executor(
-                        None,
-                        lambda seq=seq, wp=wp: self._mav.mav.mission_item_int_send(
-                            self._mav.target_system,
-                            self._mav.target_component,
-                            seq,                                    # seq
-                            _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                            _mu.mavlink.MAV_CMD_NAV_WAYPOINT,
-                            0,                                    # current
-                            1,                                    # auto-continue
-                            wp.hold_seconds,                      # param1 hold time
-                            0, 0,                                 # param2 accept radius, param3 pass radius
-                            float("nan"),                         # param4 yaw
-                            int(wp.latitude  * 1e7),              # x = lat
-                            int(wp.longitude * 1e7),              # y = lon
-                            wp.altitude,                          # z = altitude (relative)
-                            0,                                    # mission_type
+                    it = items_to_send[seq]
+                    if msg.get_type() == "MISSION_REQUEST":
+                        await loop.run_in_executor(
+                            None,
+                            lambda s=seq, item=it: self._mav.mav.mission_item_send(
+                                self._mav.target_system,
+                                self._mav.target_component,
+                                s,                                      # seq
+                                item["frame"],
+                                item["command"],
+                                0,                                      # current
+                                1,                                      # auto-continue
+                                item["param1"],
+                                item["param2"],
+                                item["param3"],
+                                item["param4"],
+                                float(item["lat"]),
+                                float(item["lon"]),
+                                float(item["alt"]),
+                                0,                                      # mission_type
+                            )
                         )
-                    )
+                    else:
+                        await loop.run_in_executor(
+                            None,
+                            lambda s=seq, item=it: self._mav.mav.mission_item_int_send(
+                                self._mav.target_system,
+                                self._mav.target_component,
+                                s,                                      # seq
+                                item["frame"],
+                                item["command"],
+                                0,                                      # current
+                                1,                                      # auto-continue
+                                item["param1"],
+                                item["param2"],
+                                item["param3"],
+                                item["param4"],
+                                int(item["lat"] * 1e7),                 # x = lat
+                                int(item["lon"] * 1e7),                 # y = lon
+                                float(item["alt"]),                     # z = altitude
+                                0,                                      # mission_type
+                            )
+                        )
                 elif msg.get_type() == "MISSION_ACK":
                     if msg.type != 0:
                         raise RuntimeError(f"Mission upload rejected: type={msg.type}")
-                    logger.info("Mission upload completed")
+                    logger.info("Mission upload completed successfully")
                     break
         except Exception:
             logger.exception("Mission upload failed")
@@ -1415,15 +1623,28 @@ class MavlinkWorker(DroneWorker):
                 "Drone is not armed. ARM the drone before starting a mission."
             )
 
+        # In ArduPilot/PX4, set mission current item to 1 (first command after Home)
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: self._mav.mav.mission_set_current_send(
+                    self._mav.target_system,
+                    self._mav.target_component,
+                    1,
+                ),
+            )
+        except Exception as e:
+            logger.warning("mission_set_current_send(1) failed: %s", e)
+
         # Switch to AUTO
         await loop.run_in_executor(None, lambda: self._set_mode("AUTO"))
 
-        # Send MISSION_START
+        # Send MISSION_START (param1=1: first item)
         await loop.run_in_executor(
             None,
             lambda: self._send_command_long(
                 300,   # MAV_CMD_MISSION_START
-                0, 0,
+                1.0, 0.0,
             ),
         )
         self.drone.telemetry.flight_state = "MISSION_ACTIVE"

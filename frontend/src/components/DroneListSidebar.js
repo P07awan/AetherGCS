@@ -127,12 +127,20 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
                 <div className="text-zinc-500">
                   MODE <span className="text-[#00F0FF]">{d.telemetry.flight_mode}</span>
                 </div>
-                <div className="text-zinc-500 text-right">
-                  {d.telemetry.armed ? (
-                    <span className="text-[#0088FF]">ARMED</span>
-                  ) : (
-                    <span className="text-zinc-500">DISARMED</span>
-                  )}
+                <div className="text-right">
+                  {(() => {
+                    const st = d.telemetry?.flight_state || (d.telemetry?.armed ? (d.telemetry?.altitude_relative > 1.0 ? "AIRBORNE" : "ARMED") : "DISARMED");
+                    const color = st === "AIRBORNE" || st === "MISSION_ACTIVE"
+                      ? "text-[#00F0FF] font-bold"
+                      : st === "ARMED"
+                      ? "text-[#00FF41] font-bold"
+                      : st === "TAKING_OFF" || st === "ARMING"
+                      ? "text-[#FFB000] font-bold animate-pulse"
+                      : st === "LANDING"
+                      ? "text-orange-400 font-bold animate-pulse"
+                      : "text-zinc-500";
+                    return <span className={color}>{st.replace(/_/g, " ")}</span>;
+                  })()}
                 </div>
               </div>
               {d.status === "error" && d.last_error && (

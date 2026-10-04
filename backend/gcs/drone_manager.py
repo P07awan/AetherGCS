@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import Dict, Iterable, List, Optional
 
 from .db import get_db
@@ -66,13 +67,30 @@ class DroneManager:
     # ---- CRUD ----------------------------------------------------------
     async def add_drone(self, payload: DroneCreate) -> Drone:
         async with self._lock:
+            lat = payload.home_lat
+            lon = payload.home_lon
+            if payload.connection.connection_type == "simulator":
+                # Find if any existing drone is at or very close to this home position
+                sim_count = sum(1 for w in self.workers.values() if w.drone.connection.connection_type == "simulator")
+                if sim_count > 0:
+                    for w in self.workers.values():
+                        dist = math.hypot(
+                            (lat - w.drone.home_lat) * 111139.0,
+                            (lon - w.drone.home_lon) * 111139.0 * math.cos(math.radians(lat))
+                        )
+                        if dist < 5.0:
+                            cos_lat = math.cos(math.radians(lat)) if math.cos(math.radians(lat)) != 0 else 1.0
+                            dlon = (20.0 * sim_count) / (111139.0 * cos_lat)
+                            lon = lon + dlon
+                            break
+
             drone = Drone(
                 name=payload.name,
                 system_id=payload.system_id,
                 component_id=payload.component_id,
                 connection=payload.connection,
-                home_lat=payload.home_lat,
-                home_lon=payload.home_lon,
+                home_lat=lat,
+                home_lon=lon,
                 home_alt=payload.home_alt,
             )
             if payload.connection.connection_type == "simulator":
@@ -122,14 +140,27 @@ class DroneManager:
         await asyncio.gather(*[w.connect() for w in self.workers.values()])
 
     # ---- commands (broadcast) -----------------------------------------
-    async def send_command(self, drone_ids: Iterable[str], command: str, params: dict) -> None:
+    async def send_command(self, drone_ids: Iterable[str], command: str, params: dict) -> list[dict]:
         tasks = []
         for did in drone_ids:
             worker = self.workers.get(did)
             if not worker:
                 continue
+            tasks.append(self._dispatch_safe(worker, command, params))
+        if not tasks:
+            return []
+        results = await asyncio.gather(*tasks)
+        failures = [r for r in results if not r["ok"]]
+        # If all targeted drones failed, raise the first error
+        if len(failures) == len(results) and results:
+            raise RuntimeError(failures[0]["error"])
+        return results
+
+    async def _dispatch_safe(self, worker: DroneWorker, command: str, params: dict) -> dict:
+        cmd = command.lower()
+        try:
             # Auto-connect simulator workers if not connected (convenience for testing)
-            if worker.drone.status != "connected":
+            if cmd not in ("connect", "disconnect") and worker.drone.status != "connected":
                 if isinstance(worker, SimulatorWorker):
                     await worker.connect()
                 else:
@@ -137,11 +168,12 @@ class DroneManager:
                         f"Drone '{worker.drone.name}' is disconnected. "
                         "Connect it first before sending commands."
                     )
-            tasks.append(self._dispatch(worker, command, params))
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        errors = [r for r in results if isinstance(r, Exception)]
-        if errors:
-            raise errors[0]
+            await self._dispatch(worker, command, params)
+            return {"drone_id": worker.drone.id, "name": worker.drone.name, "ok": True}
+        except Exception as exc:
+            logger.warning("Command '%s' failed on drone %s: %s", command, worker.drone.name, exc)
+            return {"drone_id": worker.drone.id, "name": worker.drone.name, "ok": False, "error": str(exc)}
+
 
     async def _dispatch(self, worker: DroneWorker, command: str, params: dict) -> None:
         cmd = command.lower()

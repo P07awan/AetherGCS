@@ -6,12 +6,12 @@ A modern, web-based Multi-Drone Ground Control Station (GCS).
 AetherGCS allows operators to connect, monitor, and command multiple drones simultaneously through a sleek web interface. It consists of a fast, asynchronous Python backend for hardware communication and a modern React frontend for real-time telemetry and mission planning on an interactive map.
 
 ## Key Features
-- **Multi-Drone Management**: Connect to multiple drones simultaneously via serial/COM ports (MAVLink protocol).
-- **Real-Time Telemetry**: Live drone state (altitude, speed, battery, GPS) streamed at ~5Hz via WebSockets.
-- **Mission Planning**: Create, edit, and manage complex flight missions with distinct waypoints and altitude profiles.
-- **Command & Control**: Send real-time commands (e.g., Takeoff, Land, Return to Launch) to one or multiple drones at once.
-- **Mission Library**: Save missions to the database, duplicate them, or import/export them as JSON files.
-- **Command History**: Keep a logged history of all commands sent to the fleet and their execution status.
+- **Multi-Drone Management**:Connect to multiple drones simultaneously via serial/COM ports (MAVLink protocol).
+- **Real-Time Telemetry**:Live drone state (altitude, speed, battery, GPS) streamed at ~5Hz via WebSockets.
+- **Mission Planning**:Create, edit, and manage complex flight missions with distinct waypoints and altitude profiles.
+- **Command & Control**:Send real-time commands (e.g., Takeoff, Land, Return to Launch) to one or multiple drones at once.
+- **Mission Library**:Save missions to the database, duplicate them, or import/export them as JSON files.
+- **Command History**:Keep a logged history of all commands sent to the fleet and their execution status.
 
 ## Technology Stack
 
@@ -20,6 +20,7 @@ AetherGCS allows operators to connect, monitor, and command multiple drones simu
 - **Styling & UI**: Tailwind CSS, Radix UI, Lucide Icons
 - **Maps**: Leaflet & React-Leaflet
 - **State Management**: Zustand & React Query
+- **Architecture Documentation**: See [FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md)
 - **Deployment**: Vercel
 
 ### Backend
