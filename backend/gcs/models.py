@@ -76,8 +76,26 @@ class Telemetry(BaseModel):
     pitch: float = 0.0          # degrees -90 to +90
     roll: float = 0.0           # degrees -180 to +180
     flight_time: int = 0        # seconds
+    
+    # GPS-Denied Local Position (NED) & Telemetry
+    local_x: float = 0.0
+    local_y: float = 0.0
+    local_z: float = 0.0
+    velocity_x: float = 0.0
+    velocity_y: float = 0.0
+    velocity_z: float = 0.0
+    
+    # Estimator Status & Validity
+    position_source: str = "NONE"       # VIO, OPTICAL_FLOW, GPS, NONE
+    position_valid: bool = False
+    velocity_valid: bool = False
+    altitude_valid: bool = False
+    estimator_quality: str = "UNKNOWN"  # GOOD, DEGRADED, INVALID, UNKNOWN
+    estimator_age_ms: float = 0.0
+    
     heartbeat: bool = True
     heartbeat_ts: str = Field(default_factory=_now_iso)
+
 
 
 class Drone(BaseModel):
