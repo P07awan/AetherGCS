@@ -108,10 +108,65 @@ The application will be available at `http://localhost:3000`.
 
 ---
 
-## Deployment
-For production, the recommended hosting stack is:
-- **Database**: MongoDB Atlas (Free Tier)
-- **Backend**: Render (Web Service)
-- **Frontend**: Vercel
+## Production Deployment Guide
 
-*Make sure to update your production environment variables (like `REACT_APP_BACKEND_URL` and `MONGO_URL`) on the respective hosting platforms!*
+The recommended stack is:
+- **Database**: MongoDB Atlas (Free Tier M0)
+- **Backend**: Render (Web Service with WebSockets)
+- **Frontend**: Vercel (Static SPA with automatic CDN edge caching)
+
+---
+
+### Step 1: Database Setup (MongoDB Atlas)
+1. Go to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) and create a free M0 cluster.
+2. In **Security > Database Access**, create a user with a secure password.
+3. In **Security > Network Access**, click **Add IP Address** and select **Allow Access from Anywhere (`0.0.0.0/0`)** so Render can connect.
+4. Click **Connect > Drivers > Python** and copy your connection string:
+   ```
+   mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
+   ```
+
+---
+
+### Step 2: Backend Deployment (Render)
+1. Push your repository to GitHub:
+   ```bash
+   git add .
+   git commit -m "Configure production deployment"
+   git push origin main
+   ```
+2. Go to your [Render Dashboard](https://dashboard.render.com/) and click **New > Web Service** (or **New > Blueprint** to use `render.yaml`).
+3. Connect your GitHub repository `P07awan/AetherGCS`.
+4. Configure the service:
+   - **Root Directory**: `backend`
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn server:app --host 0.0.0.0 --port $PORT`
+5. Under **Environment Variables**, add:
+   - `MONGO_URL`: `<your-mongodb-atlas-connection-string>`
+   - `DB_NAME`: `aether_gcs`
+   - `CORS_ORIGINS`: `*`
+   - `PYTHON_VERSION`: `3.11.9`
+6. Click **Deploy Web Service**.
+7. Once deployed, copy your backend URL (e.g., `https://aethergcs-backend.onrender.com`). Verify it by visiting `https://aethergcs-backend.onrender.com/api/` in your browser (should return `{"service": "gcs", ...}`).
+
+---
+
+### Step 3: Frontend Deployment (Vercel)
+1. Go to [Vercel](https://vercel.com/) and click **Add New > Project**.
+2. Import your GitHub repository `P07awan/AetherGCS`.
+3. In the project configuration:
+   - **Framework Preset**: `Create React App`
+   - **Root Directory**: Click *Edit* and select `frontend`
+4. Expand **Environment Variables** and add:
+   - `REACT_APP_BACKEND_URL`: `https://<your-render-backend-subdomain>.onrender.com` *(no trailing slash!)*
+5. Click **Deploy**.
+6. Vercel will build the frontend and provide your production URL (e.g., `https://aether-gcs.vercel.app`).
+
+---
+
+### Step 4: Verification
+- Open your Vercel URL in your browser.
+- Open the Developer Tools (F12) -> Network / Console tab.
+- Verify that API calls to `/api/drones` succeed (200 OK) and the WebSocket connection to `/api/ws/telemetry` connects successfully with real-time status.
+

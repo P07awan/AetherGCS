@@ -10,7 +10,7 @@ def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
         mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-        _client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=2000)
+        _client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
     return _client
 
 
