@@ -708,9 +708,16 @@ class MavlinkWorker(DroneWorker):
             self.drone.last_error = err_msg
             raise
 
-        # wait for first heartbeat
+        # wait for first heartbeat matching target system_id if specified
         def _wait_hb():
-            return mav.wait_heartbeat(timeout=self.CONNECT_TIMEOUT)
+            start_t = time.time()
+            while time.time() - start_t < self.CONNECT_TIMEOUT:
+                hb_candidate = mav.wait_heartbeat(timeout=1.0)
+                if hb_candidate is not None:
+                    src = hb_candidate.get_srcSystem()
+                    if not self.drone.system_id or src == self.drone.system_id:
+                        return hb_candidate
+            return None
 
         hb = await asyncio.wait_for(
             loop.run_in_executor(None, _wait_hb),
@@ -721,6 +728,12 @@ class MavlinkWorker(DroneWorker):
             raise TimeoutError("No heartbeat received within timeout")
 
         self._mav = mav
+        # Lock target_system to this drone's system_id
+        src_sys = hb.get_srcSystem()
+        if not self.drone.system_id:
+            self.drone.system_id = src_sys
+        mav.target_system = self.drone.system_id
+
         # populate firmware / autopilot info from heartbeat
         autopilot = getattr(hb, "autopilot", 3)
         fw_names  = {3: "ArduPilot", 12: "PX4", 8: "SLUGS", 0: "Generic"}
@@ -830,6 +843,13 @@ class MavlinkWorker(DroneWorker):
 
     def _handle_message(self, msg) -> None:
         """Map incoming MAVLink messages to Telemetry fields."""
+        # Multi-drone safety: ensure message belongs to this drone's system ID
+        src_sys_fn = getattr(msg, "get_srcSystem", None)
+        if callable(src_sys_fn):
+            src_sys = src_sys_fn()
+            if self.drone.system_id and src_sys != 0 and src_sys != self.drone.system_id:
+                return
+
         t   = self.drone.telemetry
         typ = msg.get_type()
 

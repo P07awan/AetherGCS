@@ -160,3 +160,47 @@ def test_simultaneous_swarm_command():
         await dm.shutdown()
 
     asyncio.run(_run())
+
+
+def test_mavlink_worker_system_id_isolation():
+    """Verify MavlinkWorker rejects telemetry from mismatching system IDs."""
+    from unittest.mock import MagicMock
+    from gcs.drone_worker import MavlinkWorker
+    from gcs.models import Drone, ConnectionProfile
+
+    drone = Drone(
+        name="Drone 1",
+        system_id=1,
+        component_id=1,
+        connection=ConnectionProfile(connection_type="udp", address="127.0.0.1", port=14550),
+        home_lat=37.7749,
+        home_lon=-122.4194,
+        home_alt=0.0,
+    )
+    worker = MavlinkWorker(drone, on_update=lambda d: None)
+
+    # Mock message from system_id 2
+    msg_other = MagicMock()
+    msg_other.get_type.return_value = "GLOBAL_POSITION_INT"
+    msg_other.get_srcSystem.return_value = 2
+    msg_other.lat = int(40.0 * 1e7)
+    msg_other.lon = int(-120.0 * 1e7)
+    msg_other.alt = 50000
+    msg_other.relative_alt = 20000
+
+    worker._handle_message(msg_other)
+    # Latitude should NOT be updated because srcSystem is 2 and drone is 1
+    assert worker.drone.telemetry.latitude == 0.0
+
+    # Mock message from system_id 1
+    msg_self = MagicMock()
+    msg_self.get_type.return_value = "GLOBAL_POSITION_INT"
+    msg_self.get_srcSystem.return_value = 1
+    msg_self.lat = int(40.0 * 1e7)
+    msg_self.lon = int(-120.0 * 1e7)
+    msg_self.alt = 50000
+    msg_self.relative_alt = 20000
+
+    worker._handle_message(msg_self)
+    # Latitude should be updated because srcSystem is 1
+    assert worker.drone.telemetry.latitude == 40.0
