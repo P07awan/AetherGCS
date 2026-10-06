@@ -9,7 +9,8 @@ _db = None
 def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=2000)
+        mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+        _client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=2000)
     return _client
 
 
@@ -17,7 +18,8 @@ def get_client() -> AsyncIOMotorClient:
 def get_db():
     global _db
     if _db is None:
-        _db = get_client()[os.environ["DB_NAME"]]
+        db_name = os.environ.get("DB_NAME", "aether_gcs")
+        _db = get_client()[db_name]
     return _db
 
 

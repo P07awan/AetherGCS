@@ -1,0 +1,59 @@
+# Development docker-compose override for hot-reloading
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: aether-mongodb-dev
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_dev_data:/data/db
+    networks:
+      - aether-dev-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aether-backend-dev
+    restart: unless-stopped
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=aether_gcs
+      - CORS_ORIGINS=*
+    depends_on:
+      - mongodb
+    networks:
+      - aether-dev-net
+
+  frontend:
+    image: node:20-alpine
+    container_name: aether-frontend-dev
+    working_dir: /app
+    command: ["sh", "-c", "yarn install && yarn start"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_BACKEND_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - backend
+    networks:
+      - aether-dev-net
+
+volumes:
+  mongodb_dev_data:
+    driver: local
+
+networks:
+  aether-dev-net:
+    driver: bridge

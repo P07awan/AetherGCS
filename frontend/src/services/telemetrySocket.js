@@ -4,7 +4,15 @@ import { API } from "@/services/api";
  * Real-time telemetry WebSocket handler with auto-reconnect.
  */
 export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onCommand, onStatus }) {
-  const wsUrl = API.replace(/^http/, "ws") + "/ws/telemetry";
+  const getWsUrl = () => {
+    if (API.startsWith("http://") || API.startsWith("https://")) {
+      return API.replace(/^http/, "ws") + "/ws/telemetry";
+    }
+    const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = typeof window !== "undefined" ? window.location.host : "localhost:8000";
+    return `${protocol}//${host}${API.startsWith("/") ? API : `/${API}`}/ws/telemetry`;
+  };
+  const wsUrl = getWsUrl();
   let ws = null;
   let closed = false;
   let reconnectDelay = 1000;

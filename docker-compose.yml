@@ -1,0 +1,65 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: aether-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --eval \"db.adminCommand('ping')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aether-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=aether_gcs
+      - CORS_ORIGINS=*
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_BACKEND_URL=
+    container_name: aether-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - aether-net
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  aether-net:
+    driver: bridge

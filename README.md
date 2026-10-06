@@ -28,11 +28,36 @@ AetherGCS allows operators to connect, monitor, and command multiple drones simu
 - **Real-Time**: WebSockets for telemetry broadcasting
 - **Drone Comms**: PyMAVLink & PySerial
 - **Database**: MongoDB (using Motor for async I/O)
-- **Deployment**: Render
+- **Deployment**: Render / Docker
 
 ---
 
-## Getting Started (Local Development)
+## Quick Start with Docker (Recommended)
+
+The easiest way to run the entire AetherGCS stack (MongoDB, FastAPI backend, and React frontend) is using Docker Compose:
+
+### 1. Start all services
+```bash
+docker compose up --build
+```
+
+- **Frontend**: [http://localhost:3000](http://localhost:3000)
+- **Backend API & Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **MongoDB**: `localhost:27017`
+
+### 2. Stop services
+```bash
+docker compose down
+```
+
+*(Optional) For live-reloading during development inside Docker:*
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+---
+
+## Manual Local Development Setup
 
 ### Prerequisites
 - Node.js & Yarn
