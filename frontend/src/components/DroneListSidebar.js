@@ -89,6 +89,23 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
                 <span className="font-display font-bold text-sm text-zinc-100 truncate flex-1">
                   {d.name}
                 </span>
+                {d.connection?.connection_type === "serial" ? (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-[#FFB000] border border-[#FFB000]/40 font-bold shrink-0">
+                    {d.connection?.address || "COM"}
+                  </span>
+                ) : d.connection?.connection_type === "udp" ? (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-[#00F0FF] border border-[#00F0FF]/30 shrink-0">
+                    UDP:{d.connection?.port || 14550}
+                  </span>
+                ) : d.connection?.connection_type === "tcp" ? (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-purple-400 border border-purple-400/30 shrink-0">
+                    TCP:{d.connection?.port || 5760}
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 shrink-0">
+                    SIM
+                  </span>
+                )}
                 {d.status === "connected" ? (
                   <Wifi className="w-3.5 h-3.5 text-[#00FF41]" />
                 ) : (

@@ -11,6 +11,7 @@ import GcsModal from "@/components/GcsModal";
 import { useGCS } from "@/store/gcsStore";
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1500000];
+const COMMON_COM_PORTS = ["COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "/dev/ttyUSB0", "/dev/ttyACM0"];
 const COMMON_UDP_PORTS = [14550, 14551, 14552, 14553, 14555, 14556];
 const COMMON_TCP_PORTS = [5760, 5761, 5762, 5763, 5770];
 
@@ -297,7 +298,7 @@ export default function AddDroneDialog({ open, onOpenChange }) {
             Connection Type
           </div>
           <div className="flex border border-zinc-700 rounded-sm overflow-hidden bg-zinc-900">
-            <TabBtn testid="tab-conn-serial" active={type === "serial"}    onClick={() => setType("serial")}    icon={Cable} label="Serial (USB/Radio)" />
+            <TabBtn testid="tab-conn-serial" active={type === "serial"}    onClick={() => setType("serial")}    icon={Cable} label="Serial (COM / USB)" />
             <TabBtn testid="tab-conn-udp"    active={type === "udp"}       onClick={() => setType("udp")}       icon={Wifi}  label="UDP" />
             <TabBtn testid="tab-conn-tcp"    active={type === "tcp"}       onClick={() => setType("tcp")}       icon={Radio} label="TCP" />
             <TabBtn testid="tab-conn-sim"    active={type === "simulator"} onClick={() => setType("simulator")} icon={Zap}   label="Simulator" />
@@ -310,13 +311,13 @@ export default function AddDroneDialog({ open, onOpenChange }) {
             <div className="space-y-3">
               <div className="grid grid-cols-6 gap-3">
                 <div className="col-span-4">
-                  <Field label="Serial Port / Device Path">
+                  <Field label="COM Port / Device Path">
                     <Input
                       data-testid="input-serial-port"
                       value={serialPort}
                       onChange={(e) => setSerialPort(e.target.value)}
-                      placeholder="e.g. COM3, COM18, or /dev/ttyUSB0"
-                      className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs"
+                      placeholder="e.g. COM3, COM4, COM18, or /dev/ttyUSB0"
+                      className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs font-bold text-[#FFB000]"
                     />
                   </Field>
                 </div>
@@ -341,7 +342,7 @@ export default function AddDroneDialog({ open, onOpenChange }) {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[10px] font-mono uppercase text-zinc-400 flex items-center gap-1">
-                    <Cpu className="w-3 h-3 text-[#00F0FF]" /> Detected System Serial Ports
+                    <Cpu className="w-3 h-3 text-[#00F0FF]" /> Hardware Detected COM Ports
                   </span>
                   <button
                     type="button"
@@ -350,34 +351,59 @@ export default function AddDroneDialog({ open, onOpenChange }) {
                     className="text-[10px] font-mono text-[#00F0FF] hover:underline flex items-center gap-1"
                   >
                     <RefreshCw className={`w-3 h-3 ${scanningPorts ? "animate-spin" : ""}`} />
-                    {scanningPorts ? "Scanning..." : "Scan Ports"}
+                    {scanningPorts ? "Scanning..." : "Rescan Hardware"}
                   </button>
                 </div>
 
-                {detectedPorts.length === 0 ? (
-                  <div className="text-[11px] font-mono text-zinc-500 bg-zinc-900 border border-zinc-800 p-2 rounded-sm">
-                    No physical COM ports detected on host. Plug in USB cable or Telemetry Radio module and click Scan.
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
+                {detectedPorts.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
                     {detectedPorts.map((dp) => (
                       <button
                         key={dp.port}
                         type="button"
                         onClick={() => setSerialPort(dp.port)}
-                        className={`text-[10px] font-mono px-2 py-1 rounded-sm border text-left transition-colors ${
+                        className={`text-[10px] font-mono px-2 py-1 rounded-sm border text-left transition-colors flex items-center gap-1.5 ${
                           serialPort === dp.port
-                            ? "border-[#FFB000] bg-[#FFB000]/10 text-[#FFB000]"
+                            ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41] font-bold"
                             : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500"
                         }`}
                         title={dp.description}
                       >
-                        <span className="font-bold">{dp.port}</span>
-                        <span className="text-zinc-400 ml-1 text-[9px]">({dp.description.slice(0, 30)})</span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#00FF41] animate-pulse" />
+                        <span>{dp.port}</span>
+                        <span className="text-zinc-400 text-[9px]">({(dp.description || "Active").slice(0, 24)})</span>
                       </button>
                     ))}
                   </div>
+                ) : (
+                  <div className="text-[10px] font-mono text-zinc-500 bg-zinc-900/60 border border-zinc-800/80 p-1.5 rounded-sm mb-2 flex items-center justify-between">
+                    <span>No USB/Telemetry hardware auto-detected yet. Select standard COM port below:</span>
+                  </div>
                 )}
+
+                {/* Always-visible Quick Select COM Buttons */}
+                <div className="space-y-1">
+                  <div className="text-[10px] font-mono text-zinc-400 flex items-center justify-between">
+                    <span className="font-semibold text-zinc-300">Quick Select COM Port:</span>
+                    <span className="text-[10px] text-[#FFB000] font-mono font-bold">Active: {serialPort || "None"}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {COMMON_COM_PORTS.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setSerialPort(p)}
+                        className={`text-[10px] font-mono px-2.5 py-1 rounded-sm border transition-colors ${
+                          serialPort === p
+                            ? "border-[#FFB000] bg-[#FFB000]/20 text-[#FFB000] font-bold shadow-sm"
+                            : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100"
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <p className="text-[10px] text-zinc-400 font-mono">

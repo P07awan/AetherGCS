@@ -76,6 +76,19 @@ const TelemetryPanel = forwardRef(({ style, className = "" }, ref) => {
         <Section title="STATUS" icon={Activity}>
           <Row label="Connection" value={d.status.toUpperCase()} testid="tlm-status"
             accent={d.status === "connected" ? "text-[#00FF41]" : "text-[#FF003C]"} />
+          <Row
+            label="Port / Link"
+            value={
+              d.connection?.connection_type === "serial"
+                ? `${d.connection?.address || "COM"} (${d.connection?.baud_rate || 57600})`
+                : d.connection?.connection_type === "udp"
+                ? `UDP :${d.connection?.port || 14550}`
+                : d.connection?.connection_type === "tcp"
+                ? `TCP :${d.connection?.port || 5760}`
+                : "SIMULATOR"
+            }
+            accent="text-[#FFB000]"
+          />
           <Row label="Mode" value={t.flight_mode} testid="tlm-mode" accent="text-[#00F0FF]" />
           <Row label="Armed" value={t.armed ? "YES" : "NO"} testid="tlm-armed"
             accent={t.armed ? "text-[#0088FF]" : "text-zinc-400"} />
