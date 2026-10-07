@@ -41,9 +41,9 @@ The easiest way to run the entire AetherGCS stack (MongoDB, FastAPI backend, and
 docker compose up --build
 ```
 
-- **Frontend**: [http://localhost:3000](http://localhost:3000)
-- **Backend API & Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **MongoDB**: `localhost:27017`
+- **Frontend**: [http://localhost](http://localhost) (runs on standard port 80 — no port shown in URL)
+- **Backend API & Swagger Docs**: [http://localhost/docs](http://localhost/docs) (reverse-proxied via Nginx, no port shown)
+- **MongoDB**: Internal private network (shielded from public port exposure)
 
 ### 2. Stop services
 ```bash
@@ -109,6 +109,8 @@ The application will be available at `http://localhost:3000`.
 ---
 
 ## Production Deployment Guide
+
+> **Detailed Walkthrough**: For an in-depth walkthrough with architecture diagrams, checklist, and troubleshooting steps, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
 
 The recommended stack is:
 - **Database**: MongoDB Atlas (Free Tier M0)

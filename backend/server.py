@@ -319,12 +319,19 @@ async def ws_telemetry(ws: WebSocket):
 
 app.include_router(api)
 
-_cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
-_allow_credentials = _cors_origins != ["*"]  # credentials=True is invalid with wildcard origins
+_raw_cors = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins = [o.strip() for o in _raw_cors.split(",") if o.strip()]
+if not _cors_origins:
+    _cors_origins = ["*"]
+
+_is_wildcard = "*" in _cors_origins
+_allow_credentials = not _is_wildcard
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=_allow_credentials,
-    allow_origins=_cors_origins,
+    allow_origins=_cors_origins if not _is_wildcard else ["*"],
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$" if not _is_wildcard else None,
     allow_methods=["*"],
     allow_headers=["*"],
 )

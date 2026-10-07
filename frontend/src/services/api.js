@@ -1,9 +1,9 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
+const BACKEND_URL = (process.env.REACT_APP_BACKEND_URL || "").trim().replace(/\/+$/, "");
 export const API = BACKEND_URL ? `${BACKEND_URL}/api` : "/api";
 
-const client = axios.create({ baseURL: API, timeout: 15000 });
+const client = axios.create({ baseURL: API, timeout: 60000 });
 
 export const dronesApi = {
   list: () => client.get("/drones").then((r) => r.data),
