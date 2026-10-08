@@ -622,6 +622,13 @@ class MavlinkWorker(DroneWorker):
         self.drone.status = "connecting"
         self.drone.last_error = None
         self.on_update(self.drone)
+        logger.info(
+            "[Drone %s] name=%s system_id=%s conn_type=%s address=%s port=%s connection_attempt",
+            self.drone.id, self.drone.name, self.drone.system_id,
+            self.drone.connection.connection_type,
+            self.drone.connection.address or "—",
+            self.drone.connection.port or "—",
+        )
         try:
             await self._open_link()
         except Exception as exc:
@@ -684,7 +691,10 @@ class MavlinkWorker(DroneWorker):
         loop      = asyncio.get_running_loop()
         ct        = self.drone.connection.connection_type
 
-        logger.info("MavlinkWorker %s opening %s (baud=%s)", self.drone.id, conn_str, baud)
+        logger.info(
+            "[Drone %s] system_id=%s conn_type=%s mavlink_string=%s baud=%s opening_link",
+            self.drone.id, self.drone.system_id, ct, conn_str, baud,
+        )
 
         # mavlink_connection is blocking — run in thread executor
         def _open():
@@ -702,21 +712,60 @@ class MavlinkWorker(DroneWorker):
             err_msg = str(exc)
             if "Permission denied" in err_msg or "Errno 13" in err_msg:
                 port_name = self.drone.connection.address or conn_str
-                clean_err = f"Port {port_name} is locked by another program (e.g. Mission Planner or QGroundControl). Please disconnect Mission Planner or close software using {port_name}."
+                clean_err = (
+                    f"Port {port_name} is locked by another program "
+                    "(e.g. Mission Planner or QGroundControl). "
+                    f"Please disconnect Mission Planner or close software using {port_name}."
+                )
+                self.drone.last_error = clean_err
+                raise RuntimeError(clean_err) from exc
+            if "Address already in use" in err_msg or "Errno 98" in err_msg or "WinError 10048" in err_msg:
+                port_num = self.drone.connection.port
+                clean_err = (
+                    f"Unable to bind UDP port {port_num}. "
+                    "The port is already in use by another drone worker or application. "
+                    f"For SITL, ensure each drone listens on a unique port and "
+                    f"that SITL sends MAVLink to UDP port {port_num}."
+                )
                 self.drone.last_error = clean_err
                 raise RuntimeError(clean_err) from exc
             self.drone.last_error = err_msg
             raise
 
-        # wait for first heartbeat matching target system_id if specified
+        # Wait for first heartbeat that matches the configured system_id.
+        # If auto_detect_system_id=True the worker accepts the first heartbeat
+        # from any source and locks on to it — useful for single-drone setups
+        # where the sysid is unknown beforehand.  This flag defaults to False
+        # so that multi-drone setups always require an explicit match.
+        auto_detect = self.drone.connection.auto_detect_system_id
+        expected_sysid = self.drone.system_id  # always >= 1 (enforced by Pydantic)
+
+        logger.info(
+            "[Drone %s] system_id=%s conn=%s waiting_for_heartbeat=true auto_detect=%s",
+            self.drone.id, expected_sysid, conn_str, auto_detect,
+        )
+
         def _wait_hb():
             start_t = time.time()
             while time.time() - start_t < self.CONNECT_TIMEOUT:
                 hb_candidate = mav.wait_heartbeat(timeout=1.0)
-                if hb_candidate is not None:
-                    src = hb_candidate.get_srcSystem()
-                    if not self.drone.system_id or src == self.drone.system_id:
-                        return hb_candidate
+                if hb_candidate is None:
+                    continue
+                src = hb_candidate.get_srcSystem()
+                if auto_detect:
+                    # Discovery mode: accept any non-GCS heartbeat
+                    logger.info(
+                        "[Drone %s] auto_detect: heartbeat_received sysid=%s — locking on",
+                        self.drone.id, src,
+                    )
+                    return hb_candidate
+                if src == expected_sysid:
+                    return hb_candidate
+                # Log mismatched heartbeats so operators can diagnose cross-talk
+                logger.warning(
+                    "[Drone %s] heartbeat_received sysid=%s expected_sysid=%s action=IGNORED reason=SYSTEM_ID_MISMATCH",
+                    self.drone.id, src, expected_sysid,
+                )
             return None
 
         hb = await asyncio.wait_for(
@@ -725,12 +774,18 @@ class MavlinkWorker(DroneWorker):
         )
         if hb is None:
             mav.close()
-            raise TimeoutError("No heartbeat received within timeout")
+            raise TimeoutError(
+                f"No heartbeat received from system ID {expected_sysid} within "
+                f"{self.CONNECT_TIMEOUT}s. "
+                "Check that the SITL/flight controller is running and sending "
+                f"MAVLink telemetry to port {self.drone.connection.port or '(configured port)'}."
+            )
 
         self._mav = mav
         # Lock target_system to this drone's system_id
         src_sys = hb.get_srcSystem()
-        if not self.drone.system_id:
+        if auto_detect:
+            # Discovery: update drone model with the discovered sysid
             self.drone.system_id = src_sys
         mav.target_system = self.drone.system_id
 
@@ -740,8 +795,8 @@ class MavlinkWorker(DroneWorker):
         fw_label  = fw_names.get(autopilot, f"AP_{autopilot}")
         self.drone.firmware = f"{fw_label} (live)"
         logger.info(
-            "MavlinkWorker %s connected — autopilot=%s sysid=%s",
-            self.drone.id, fw_label, mav.target_system,
+            "[Drone %s] heartbeat_received sysid=%s expected_sysid=%s status=CONNECTED autopilot=%s conn=%s",
+            self.drone.id, src_sys, self.drone.system_id, fw_label, conn_str,
         )
 
         # request all standard data streams at TELEMETRY_STREAM_RATE Hz
@@ -842,12 +897,20 @@ class MavlinkWorker(DroneWorker):
         return max(0.0, min(100.0, round(pct, 0)))
 
     def _handle_message(self, msg) -> None:
-        """Map incoming MAVLink messages to Telemetry fields."""
-        # Multi-drone safety: ensure message belongs to this drone's system ID
+        """Map incoming MAVLink messages to Telemetry fields.
+
+        Multi-drone safety: every message is filtered by source system ID.
+        Only messages whose srcSystem exactly matches this worker's
+        drone.system_id are processed. This prevents cross-talk between
+        multiple drones on a shared network segment.
+        """
         src_sys_fn = getattr(msg, "get_srcSystem", None)
         if callable(src_sys_fn):
             src_sys = src_sys_fn()
-            if self.drone.system_id and src_sys != 0 and src_sys != self.drone.system_id:
+            if src_sys != self.drone.system_id:
+                # Silently drop — expected in multi-drone setups.
+                # Mismatches are logged at WARNING during _wait_hb(); no need
+                # to spam the log on every telemetry packet.
                 return
 
         t   = self.drone.telemetry

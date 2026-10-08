@@ -42,11 +42,16 @@ class ConnectionProfile(BaseModel):
     port: Optional[int] = None
     baud_rate: Optional[int] = None
     auto_reconnect: bool = True
+    # When True, the worker accepts the first heartbeat from any system ID and
+    # locks on to it.  Keep False (the default) for multi-drone setups where
+    # every drone has an explicit system_id.  system_id=0 is never a wildcard.
+    auto_detect_system_id: bool = False
 
 
 class DroneCreate(BaseModel):
     name: str
-    system_id: int = 1
+    # MAVLink system IDs must be 1-255; 0 is reserved/invalid.
+    system_id: int = Field(default=1, ge=1, le=255)
     component_id: int = 1
     connection: ConnectionProfile = Field(default_factory=ConnectionProfile)
     home_lat: float = 37.7749

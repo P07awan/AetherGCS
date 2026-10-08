@@ -20,10 +20,17 @@ def session():
     yield s
 
 
-def _create_drone(session, name="TEST_Alpha"):
+import itertools
+
+_sysid_counter = itertools.count(10 + (os.getpid() % 15) * 10)
+
+
+def _create_drone(session, name="TEST_Alpha", system_id=None):
+    if system_id is None:
+        system_id = next(_sysid_counter)
     payload = {
         "name": name,
-        "system_id": 1,
+        "system_id": system_id,
         "component_id": 1,
         "connection": {"connection_type": "simulator", "address": "sim://local", "port": 0},
         "home_lat": 37.7749,

@@ -6,7 +6,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { dronesApi } from "@/services/api";
-import { Cable, Wifi, Radio, Zap, MapPin, RefreshCw, Cpu } from "lucide-react";
+import { Cable, Wifi, Radio, Zap, MapPin, RefreshCw, Cpu, AlertTriangle } from "lucide-react";
 import GcsModal from "@/components/GcsModal";
 import { useGCS } from "@/store/gcsStore";
 
@@ -47,10 +47,16 @@ const TabBtn = ({ active, onClick, icon: Icon, label, testid }) => (
   </button>
 );
 
-const Field = ({ label, children }) => (
+const Field = ({ label, children, error }) => (
   <div>
     <label className="text-[10px] font-mono uppercase text-zinc-400">{label}</label>
     <div className="mt-1">{children}</div>
+    {error && (
+      <div className="flex items-center gap-1 mt-1">
+        <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" />
+        <p className="text-[10px] text-red-400 font-mono">{error}</p>
+      </div>
+    )}
   </div>
 );
 
@@ -60,6 +66,34 @@ const NATO_NAMES = [
   "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo",
   "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"
 ];
+
+// ---- Helpers ---------------------------------------------------------------
+
+/** Normalise local-loopback variants to a canonical token for comparison. */
+function normaliseHost(addr) {
+  const clean = (addr || "").trim().toLowerCase();
+  return (clean === "" || clean === "0.0.0.0" || clean === "localhost") ? "127.0.0.1" : clean;
+}
+
+/** Case-insensitive serial port comparison. */
+function normaliseSerial(path) {
+  return (path || "").trim().toUpperCase();
+}
+
+/**
+ * Find the lowest available system ID (1–255) not already assigned to a drone.
+ * Never returns 0.
+ */
+function getNextAvailableSystemId(droneList) {
+  const used = new Set(
+    droneList.map((d) => Number(d.system_id)).filter((id) => Number.isInteger(id) && id >= 1)
+  );
+  let id = 1;
+  while (used.has(id)) id++;
+  return id;
+}
+
+// ---- Main component --------------------------------------------------------
 
 export default function AddDroneDialog({ open, onOpenChange }) {
   const userLocation = useGCS((s) => s.userLocation);
@@ -79,7 +113,10 @@ export default function AddDroneDialog({ open, onOpenChange }) {
   const [homeLon, setHomeLon] = useState(-122.4194);
   const [busy, setBusy] = useState(false);
   const [homeTouched, setHomeTouched] = useState(false);
-  
+
+  // Per-field inline validation errors
+  const [fieldErrors, setFieldErrors] = useState({});
+
   // Real system serial port scanning
   const [detectedPorts, setDetectedPorts] = useState([]);
   const [scanningPorts, setScanningPorts] = useState(false);
@@ -88,18 +125,25 @@ export default function AddDroneDialog({ open, onOpenChange }) {
   useEffect(() => {
     if (open) {
       const existingNames = new Set(droneList.map((d) => d.name));
-      const existingSysIds = droneList.map((d) => d.system_id).filter((n) => typeof n === "number");
-      const nextSysId = existingSysIds.length > 0 ? Math.max(...existingSysIds) + 1 : 1;
+
+      // Always recompute from the live drone list — not from stale dialog state
+      const nextSysId = getNextAvailableSystemId(droneList);
       setSysId(nextSysId);
 
       const nextName = NATO_NAMES.map((n) => `Drone ${n}`).find((n) => !existingNames.has(n))
         || `Drone ${droneList.length + 1}`;
       setName(nextName);
 
-      // Auto-increment UDP port if 14550 is used
+      // Auto-increment UDP port to the first unused one
       if (type === "udp") {
-        const nextUdp = 14550 + droneList.length;
-        setUdpPort(nextUdp);
+        const usedPorts = new Set(
+          droneList
+            .filter((d) => d.connection?.connection_type === "udp")
+            .map((d) => Number(d.connection.port))
+        );
+        let nextPort = 14550;
+        while (usedPorts.has(nextPort)) nextPort++;
+        setUdpPort(nextPort);
       }
 
       if (!homeTouched) {
@@ -113,6 +157,8 @@ export default function AddDroneDialog({ open, onOpenChange }) {
         setHomeLat(Number(baseLat.toFixed(6)));
         setHomeLon(Number(baseLon.toFixed(6)));
       }
+
+      setFieldErrors({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -159,13 +205,13 @@ export default function AddDroneDialog({ open, onOpenChange }) {
     toast.success("Home set to your current location (with fleet offset)");
   };
 
-
   const applyPreset = (p) => {
     const c = p.conf;
     setType(c.type);
     if (c.type === "serial") { setSerialPort(c.address); setBaud(c.baud); }
     if (c.type === "udp") { setUdpAddress(c.address); setUdpPort(c.port); }
     if (c.type === "tcp") { setTcpAddress(c.address); setTcpPort(c.port); }
+    setFieldErrors({});
   };
 
   const buildConnection = () => {
@@ -175,13 +221,97 @@ export default function AddDroneDialog({ open, onOpenChange }) {
     return { connection_type: "simulator", address: "sim://local", port: 0, baud_rate: null, auto_reconnect: true };
   };
 
-  const submit = async () => {
-    if (!name.trim()) return toast.error("Name required");
-    if (type === "serial" && !serialPort.trim()) return toast.error("Serial port path required (e.g. COM3 or /dev/ttyUSB0)");
-    if (type !== "simulator" && !userLocation && !homeTouched) {
-      return toast.error("Laptop GPS location is required before adding a real drone");
+  // ---- Client-side validation (mirrors backend rules) --------------------
+  const validate = () => {
+    const errors = {};
+
+    // Read the latest drone list each time — dialog may stay open across adds
+    const latestDrones = Object.values(dronesMap);
+    const numSysId = Number(sysId);
+
+    // Name
+    if (!name.trim()) {
+      errors.name = "Drone name is required.";
     }
-    
+
+    // System ID range (1–255 per MAVLink spec)
+    if (!Number.isInteger(numSysId) || numSysId < 1 || numSysId > 255) {
+      errors.sysId = "System ID must be an integer between 1 and 255.";
+    } else {
+      // Duplicate system ID check
+      const conflict = latestDrones.find((d) => Number(d.system_id) === numSysId);
+      if (conflict) {
+        errors.sysId = `System ID ${numSysId} is already used by "${conflict.name}". Choose a different ID.`;
+      }
+    }
+
+    if (type === "serial") {
+      if (!serialPort.trim()) {
+        errors.serialPort = "Serial port path is required (e.g. COM3 or /dev/ttyUSB0).";
+      } else {
+        // Duplicate serial port check
+        const conflict = latestDrones.find(
+          (d) =>
+            d.connection?.connection_type === "serial" &&
+            normaliseSerial(d.connection.address) === normaliseSerial(serialPort)
+        );
+        if (conflict) {
+          errors.serialPort = `Port ${serialPort} is already in use by "${conflict.name}". Each drone needs a unique COM port.`;
+        }
+      }
+    }
+
+    if (type === "udp") {
+      const normAddr = normaliseHost(udpAddress);
+      const portNum = Number(udpPort);
+      if (!portNum || portNum < 1 || portNum > 65535) {
+        errors.udpPort = "UDP port must be between 1 and 65535.";
+      } else {
+        const conflict = latestDrones.find(
+          (d) =>
+            d.connection?.connection_type === "udp" &&
+            normaliseHost(d.connection.address) === normAddr &&
+            Number(d.connection.port) === portNum
+        );
+        if (conflict) {
+          errors.udpPort = `UDP ${udpAddress}:${portNum} is already used by "${conflict.name}". Each SITL drone needs a unique port (e.g. 14550, 14551, 14552…).`;
+        }
+      }
+    }
+
+    if (type === "tcp") {
+      const portNum = Number(tcpPort);
+      if (!portNum || portNum < 1 || portNum > 65535) {
+        errors.tcpPort = "TCP port must be between 1 and 65535.";
+      } else {
+        const conflict = latestDrones.find(
+          (d) =>
+            d.connection?.connection_type === "tcp" &&
+            normaliseHost(d.connection.address) === normaliseHost(tcpAddress) &&
+            Number(d.connection.port) === portNum
+        );
+        if (conflict) {
+          errors.tcpPort = `TCP ${tcpAddress}:${portNum} is already used by "${conflict.name}". Choose a different port.`;
+        }
+      }
+    }
+
+    if (type !== "simulator" && !userLocation && !homeTouched) {
+      errors.home = "GPS location is required before adding a real drone.";
+    }
+
+    return errors;
+  };
+
+  const submit = async () => {
+    const errors = validate();
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      // Show the first error as a toast so it's impossible to miss
+      toast.error(Object.values(errors)[0], { duration: 5000 });
+      return;
+    }
+    setFieldErrors({});
     setBusy(true);
     try {
       const drone = await dronesApi.create({
@@ -199,6 +329,13 @@ export default function AddDroneDialog({ open, onOpenChange }) {
       setBusy(false);
     }
   };
+
+  // Count how many drones already use each UDP port — for the hint panel
+  const usedUdpPorts = new Set(
+    droneList
+      .filter((d) => d.connection?.connection_type === "udp")
+      .map((d) => Number(d.connection.port))
+  );
 
   return (
     <GcsModal
@@ -253,21 +390,22 @@ export default function AddDroneDialog({ open, onOpenChange }) {
         {/* Name / SysID / Home */}
         <div className="grid grid-cols-6 gap-2">
           <div className="col-span-3">
-            <Field label="Drone Name">
+            <Field label="Drone Name" error={fieldErrors.name}>
               <Input data-testid="input-drone-name" value={name} onChange={(e) => setName(e.target.value)}
-                     className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100" />
+                     className={`bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 ${fieldErrors.name ? "border-red-500" : ""}`} />
             </Field>
           </div>
-          <Field label="Sys ID">
-            <Input data-testid="input-drone-sysid" type="number" value={sysId} onChange={(e) => setSysId(e.target.value)}
-                   className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono" />
+          <Field label="Sys ID (1–255)" error={fieldErrors.sysId}>
+            <Input data-testid="input-drone-sysid" type="number" min="1" max="255" value={sysId}
+                   onChange={(e) => setSysId(e.target.value)}
+                   className={`bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono ${fieldErrors.sysId ? "border-red-500" : ""}`} />
           </Field>
           <Field label="Home Lat">
             <Input data-testid="input-home-lat" type="number" step="0.0001" value={homeLat}
                    onChange={(e) => { setHomeLat(e.target.value); setHomeTouched(true); }}
                    className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
           </Field>
-          <Field label="Home Lon">
+          <Field label="Home Lon" error={fieldErrors.home}>
             <Input data-testid="input-home-lon" type="number" step="0.0001" value={homeLon}
                    onChange={(e) => { setHomeLon(e.target.value); setHomeTouched(true); }}
                    className="bg-zinc-950 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
@@ -278,7 +416,7 @@ export default function AddDroneDialog({ open, onOpenChange }) {
         <div className="flex items-center justify-between -mt-2">
           <span className="text-[10px] font-mono text-zinc-400">
             {userLocation
-              ? <>Live GPS: <span className="text-[#00F0FF]">{userLocation.lat.toFixed(5)}, {userLocation.lon.toFixed(5)}</span> · ±{userLocation.accuracy?.toFixed(0)}m</>
+              ? <><span className="text-[#00F0FF]">{userLocation.lat.toFixed(5)}, {userLocation.lon.toFixed(5)}</span> · ±{userLocation.accuracy?.toFixed(0)}m</>
               : "Acquiring GPS…"}
           </span>
           <button
@@ -311,13 +449,13 @@ export default function AddDroneDialog({ open, onOpenChange }) {
             <div className="space-y-3">
               <div className="grid grid-cols-6 gap-3">
                 <div className="col-span-4">
-                  <Field label="COM Port / Device Path">
+                  <Field label="COM Port / Device Path" error={fieldErrors.serialPort}>
                     <Input
                       data-testid="input-serial-port"
                       value={serialPort}
                       onChange={(e) => setSerialPort(e.target.value)}
                       placeholder="e.g. COM3, COM4, COM18, or /dev/ttyUSB0"
-                      className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs font-bold text-[#FFB000]"
+                      className={`bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs font-bold text-[#FFB000] ${fieldErrors.serialPort ? "border-red-500" : ""}`}
                     />
                   </Field>
                 </div>
@@ -413,36 +551,50 @@ export default function AddDroneDialog({ open, onOpenChange }) {
           )}
 
           {type === "udp" && (
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2">
-                <Field label="Host / Listen Address">
-                  <Input data-testid="input-udp-address" value={udpAddress}
-                         onChange={(e) => setUdpAddress(e.target.value)}
-                         placeholder="0.0.0.0 or 127.0.0.1 or 192.168.4.1"
-                         className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <Field label="Host / Listen Address">
+                    <Input data-testid="input-udp-address" value={udpAddress}
+                           onChange={(e) => setUdpAddress(e.target.value)}
+                           placeholder="0.0.0.0 or 127.0.0.1 or 192.168.4.1"
+                           className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
+                  </Field>
+                </div>
+                <Field label="Port" error={fieldErrors.udpPort}>
+                  <Input
+                    data-testid="input-udp-port"
+                    type="number"
+                    value={udpPort}
+                    onChange={(e) => setUdpPort(e.target.value)}
+                    className={`bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs ${fieldErrors.udpPort ? "border-red-500" : ""}`}
+                  />
                 </Field>
+                <div className="col-span-3 flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-mono text-zinc-400">Common UDP Ports:</span>
+                  {COMMON_UDP_PORTS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setUdpPort(p)}
+                      className={`text-[9px] font-mono px-1.5 py-0.5 border rounded-xs transition-colors ${
+                        usedUdpPorts.has(p)
+                          ? "border-red-700/60 text-red-400 bg-red-900/10 cursor-not-allowed"
+                          : "border-zinc-700 hover:border-[#FFB000] text-zinc-300"
+                      }`}
+                      title={usedUdpPorts.has(p) ? `Port ${p} is already used by another drone` : `Use port ${p}`}
+                    >
+                      :{p}{usedUdpPorts.has(p) ? " ✕" : ""}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <Field label="Port">
-                <Input
-                  data-testid="input-udp-port"
-                  type="number"
-                  value={udpPort}
-                  onChange={(e) => setUdpPort(e.target.value)}
-                  className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs"
-                />
-              </Field>
-              <div className="col-span-3 flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] font-mono text-zinc-400">Common UDP Ports:</span>
-                {COMMON_UDP_PORTS.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => setUdpPort(p)}
-                    className="text-[9px] font-mono px-1.5 py-0.5 border border-zinc-700 hover:border-[#FFB000] text-zinc-300 rounded-xs"
-                  >
-                    :{p}
-                  </button>
-                ))}
+              {/* SITL configuration guide */}
+              <div className="bg-zinc-900 border border-zinc-700 rounded-sm p-2 text-[10px] font-mono text-zinc-400 space-y-0.5">
+                <p className="text-zinc-300 font-semibold uppercase tracking-wider">UDP / SITL Configuration</p>
+                <p>Worker listens on: <span className="text-[#00F0FF]">udpin:0.0.0.0:{udpPort}</span></p>
+                <p>Configure SITL to send MAVLink to: <span className="text-[#FFB000]">127.0.0.1:{udpPort}</span></p>
+                <p className="text-zinc-500 pt-0.5">Each SITL drone must use a unique UDP port. Example: Drone 1 → :14550 · Drone 2 → :14551</p>
               </div>
             </div>
           )}
@@ -457,13 +609,13 @@ export default function AddDroneDialog({ open, onOpenChange }) {
                          className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs" />
                 </Field>
               </div>
-              <Field label="Port">
+              <Field label="Port" error={fieldErrors.tcpPort}>
                 <Input
                   data-testid="input-tcp-port"
                   type="number"
                   value={tcpPort}
                   onChange={(e) => setTcpPort(e.target.value)}
-                  className="bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs"
+                  className={`bg-zinc-900 border-zinc-700 rounded-sm h-9 text-zinc-100 font-mono text-xs ${fieldErrors.tcpPort ? "border-red-500" : ""}`}
                 />
               </Field>
               <div className="col-span-3 flex items-center gap-1.5 flex-wrap">

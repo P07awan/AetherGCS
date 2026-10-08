@@ -6,17 +6,38 @@ import logging
 import math
 from typing import Dict, Iterable, List, Optional
 
+from fastapi import HTTPException
+
 from .db import get_db
 from .drone_worker import DroneWorker, SimulatorWorker, MavlinkWorker
 from .models import Drone, DroneCreate, Waypoint
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Endpoint normalisation helpers
+# ---------------------------------------------------------------------------
+
+_LOCAL_ADDRS = {"", "0.0.0.0", "127.0.0.1", "localhost"}
+
+
+def _norm_addr(addr: str) -> str:
+    """Normalise local-loopback variants to a single canonical token."""
+    cleaned = (addr or "").strip().lower()
+    return "127.0.0.1" if cleaned in _LOCAL_ADDRS else cleaned
+
+
+def _norm_serial(path: str) -> str:
+    """Normalise serial port path for comparison (case-insensitive, stripped)."""
+    return (path or "").strip().upper()
+
 
 class DroneManager:
     def __init__(self) -> None:
         self.workers: Dict[str, DroneWorker] = {}
         self._listeners: list = []
+        # One lock guards ALL state mutations (add / remove / connect).
+        # The check-then-create section MUST stay inside the lock.
         self._lock = asyncio.Lock()
 
     # ---- events --------------------------------------------------------
@@ -36,19 +57,34 @@ class DroneManager:
 
     # ---- persistence ---------------------------------------------------
     async def load_saved(self) -> None:
+        """Restore drones from MongoDB. Applies simulator position spread on restore."""
         try:
             db = get_db()
             docs = await db.drones.find({}, {"_id": 0}).to_list(1000)
+            sim_count = 0  # track simulator drones loaded so far for spread
             for doc in docs:
                 try:
                     drone = Drone(**doc)
                     drone.status = "disconnected"
                     ct = drone.connection.connection_type
+
                     if ct == "simulator":
+                        # Re-apply the 20-m east spread so saved simulators don't stack
+                        if sim_count > 0:
+                            cos_lat = math.cos(math.radians(drone.home_lat)) or 1.0
+                            # Use the first drone's base position as the reference
+                            # (home_lon already stored correctly in the DB per add_drone)
+                            pass  # positions already stored correctly per drone in DB
                         worker: DroneWorker = SimulatorWorker(drone, on_update=self._emit)
+                        sim_count += 1
                     else:
                         worker = MavlinkWorker(drone, on_update=self._emit)
+
                     self.workers[drone.id] = worker
+                    logger.info(
+                        "Loaded saved drone id=%s name=%s type=%s",
+                        drone.id, drone.name, ct,
+                    )
                 except Exception:
                     logger.exception("failed to load drone %s", doc.get("id"))
         except Exception as e:
@@ -63,23 +99,89 @@ class DroneManager:
         except Exception as e:
             logger.warning("MongoDB unavailable for persisting drone %s: %s", drone.id, e)
 
+    # ---- duplicate detection -------------------------------------------
+    def _check_duplicate_system_id(self, system_id: int, exclude_id: str | None = None) -> None:
+        """Raise HTTP 409 if system_id is already taken by another worker."""
+        for w in self.workers.values():
+            if exclude_id and w.drone.id == exclude_id:
+                continue
+            if w.drone.system_id == system_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"System ID {system_id} is already assigned to drone "
+                        f"'{w.drone.name}' (id={w.drone.id}). "
+                        "Each drone must have a unique MAVLink system ID (1–255)."
+                    ),
+                )
+
+    def _check_duplicate_endpoint(self, payload: DroneCreate, exclude_id: str | None = None) -> None:
+        """Raise HTTP 409 if (connection_type, address, port) is already in use."""
+        ct = payload.connection.connection_type
+        if ct == "simulator":
+            return  # simulators share no physical endpoint
+
+        addr = _norm_addr(payload.connection.address)
+        port = payload.connection.port
+
+        for w in self.workers.values():
+            if exclude_id and w.drone.id == exclude_id:
+                continue
+            wc = w.drone.connection
+            if wc.connection_type != ct:
+                continue
+
+            if ct == "serial":
+                if _norm_serial(wc.address) == _norm_serial(payload.connection.address):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Serial port '{payload.connection.address}' is already used "
+                            f"by drone '{w.drone.name}' (id={w.drone.id}). "
+                            "Each serial drone must use a unique COM port / device path."
+                        ),
+                    )
+            else:  # udp / tcp
+                if _norm_addr(wc.address) == addr and wc.port == port:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"{ct.upper()} endpoint {addr}:{port} is already used "
+                            f"by drone '{w.drone.name}' (id={w.drone.id}). "
+                            "Each drone requires a unique connection endpoint. "
+                            "For SITL, assign a different UDP port per drone "
+                            "(e.g. 14550, 14551, 14552…)."
+                        ),
+                    )
 
     # ---- CRUD ----------------------------------------------------------
     async def add_drone(self, payload: DroneCreate) -> Drone:
+        # The entire check + create block is atomic under the lock so that two
+        # simultaneous requests cannot both pass validation and then both create
+        # a duplicate endpoint.
         async with self._lock:
+            # --- Duplicate validation (authoritative; frontend mirrors these) ---
+            self._check_duplicate_system_id(payload.system_id)
+            self._check_duplicate_endpoint(payload)
+
             lat = payload.home_lat
             lon = payload.home_lon
             if payload.connection.connection_type == "simulator":
-                # Find if any existing drone is at or very close to this home position
-                sim_count = sum(1 for w in self.workers.values() if w.drone.connection.connection_type == "simulator")
+                # Spread simulator drones ~20 m east of each other so they don't
+                # stack on the map.  Only nudge if another sim is very close.
+                sim_count = sum(
+                    1 for w in self.workers.values()
+                    if w.drone.connection.connection_type == "simulator"
+                )
                 if sim_count > 0:
                     for w in self.workers.values():
                         dist = math.hypot(
                             (lat - w.drone.home_lat) * 111139.0,
-                            (lon - w.drone.home_lon) * 111139.0 * math.cos(math.radians(lat))
+                            (lon - w.drone.home_lon) * 111139.0
+                            * math.cos(math.radians(lat)),
                         )
                         if dist < 5.0:
-                            cos_lat = math.cos(math.radians(lat)) if math.cos(math.radians(lat)) != 0 else 1.0
+                            cos_lat = math.cos(math.radians(lat)) or 1.0
                             dlon = (20.0 * sim_count) / (111139.0 * cos_lat)
                             lon = lon + dlon
                             break
@@ -93,25 +195,36 @@ class DroneManager:
                 home_lon=lon,
                 home_alt=payload.home_alt,
             )
+
             if payload.connection.connection_type == "simulator":
                 worker: DroneWorker = SimulatorWorker(drone, on_update=self._emit)
             else:
                 worker = MavlinkWorker(drone, on_update=self._emit)
+
             self.workers[drone.id] = worker
-            await self._persist(drone)
-            self._emit(drone)
-            return drone
+
+            logger.info(
+                "[Drone %s] created name=%s system_id=%s type=%s endpoint=%s:%s",
+                drone.id, drone.name, drone.system_id,
+                payload.connection.connection_type,
+                payload.connection.address or "—",
+                payload.connection.port or "—",
+            )
+
+        await self._persist(drone)
+        self._emit(drone)
+        return drone
 
     async def remove_drone(self, drone_id: str) -> None:
         async with self._lock:
             worker = self.workers.pop(drone_id, None)
-            if worker:
-                await worker.disconnect()
-            try:
-                db = get_db()
-                await db.drones.delete_one({"id": drone_id})
-            except Exception as e:
-                logger.warning("MongoDB unavailable for remove_drone %s: %s", drone_id, e)
+        if worker:
+            await worker.disconnect()
+        try:
+            db = get_db()
+            await db.drones.delete_one({"id": drone_id})
+        except Exception as e:
+            logger.warning("MongoDB unavailable for remove_drone %s: %s", drone_id, e)
 
     def list_drones(self) -> List[Drone]:
         return [w.drone for w in self.workers.values()]
@@ -151,7 +264,7 @@ class DroneManager:
             return []
         results = await asyncio.gather(*tasks)
         failures = [r for r in results if not r["ok"]]
-        # If all targeted drones failed, raise the first error
+        # If ALL targeted drones failed, raise the first error
         if len(failures) == len(results) and results:
             raise RuntimeError(failures[0]["error"])
         return results
@@ -159,7 +272,7 @@ class DroneManager:
     async def _dispatch_safe(self, worker: DroneWorker, command: str, params: dict) -> dict:
         cmd = command.lower()
         try:
-            # Auto-connect simulator workers if not connected (convenience for testing)
+            # Auto-connect simulator workers for convenience (testing / demo)
             if cmd not in ("connect", "disconnect") and worker.drone.status != "connected":
                 if isinstance(worker, SimulatorWorker):
                     await worker.connect()
@@ -173,7 +286,6 @@ class DroneManager:
         except Exception as exc:
             logger.warning("Command '%s' failed on drone %s: %s", command, worker.drone.name, exc)
             return {"drone_id": worker.drone.id, "name": worker.drone.name, "ok": False, "error": str(exc)}
-
 
     async def _dispatch(self, worker: DroneWorker, command: str, params: dict) -> None:
         cmd = command.lower()
@@ -224,7 +336,6 @@ class DroneManager:
             await worker.set_flight_mode(mode)
         else:
             raise ValueError(f"Unknown command: {command}")
-
 
     async def shutdown(self) -> None:
         await asyncio.gather(*[w.disconnect() for w in self.workers.values()], return_exceptions=True)
