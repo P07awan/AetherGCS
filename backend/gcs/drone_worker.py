@@ -403,8 +403,12 @@ class SimulatorWorker(DroneWorker):
             self.drone.telemetry.flight_mode = "GUIDED"
             self._mission_running = False
             self._rtl_active = False
-        if self.drone.telemetry.altitude_relative > 0.5 and self.drone.telemetry.flight_state != "MISSION_ACTIVE":
-            self.drone.telemetry.flight_state = "AIRBORNE"
+        t = self.drone.telemetry
+        if t.altitude_relative > 0.5 and t.flight_state != "MISSION_ACTIVE":
+            t.flight_state = "AIRBORNE"
+        elif t.flight_state in ("TAKING_OFF", "TAKEOFF_REQUESTED"):
+            # Joystick took over before the climb finished; don't stay "taking off" forever
+            t.flight_state = "ARMED" if t.armed else "DISARMED"
         self.on_update(self.drone)
 
     # ---- missions ----------------------------------------------------------

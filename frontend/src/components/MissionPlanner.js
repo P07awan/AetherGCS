@@ -100,6 +100,13 @@ export default function MissionPlanner() {
     }
   };
 
+  const confirmClear = () => {
+    const n = draft.waypoints.length;
+    if (n && window.confirm(`Clear all ${n} waypoint${n === 1 ? "" : "s"} from this draft mission?`)) {
+      clearWaypoints();
+    }
+  };
+
   const saveToLibrary = async () => {
     if (!draft.name.trim()) return toast.error("Mission name required");
     setSaving(true);
@@ -142,7 +149,8 @@ export default function MissionPlanner() {
 
   return (
     <div data-testid="mission-planner" className="h-full flex flex-col bg-zinc-950">
-      <div className="h-10 px-3 border-b border-zinc-700 bg-zinc-900 flex items-center gap-2">
+      {/* flex-wrap: on ~1440px screens the action buttons ran off the right edge */}
+      <div className="min-h-10 py-1 px-3 border-b border-zinc-700 bg-zinc-900 flex flex-wrap items-center gap-2">
         <RouteIcon className="w-3.5 h-3.5 text-[#FFB000]" />
         <span className="font-display font-black text-[11px] tracking-widest text-zinc-100">
           MISSION PLANNER
@@ -161,31 +169,36 @@ export default function MissionPlanner() {
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         />
-        <label className="ml-2 text-[10px] font-mono text-zinc-500">ALT</label>
-        <input
-          data-testid="input-mission-alt"
-          type="number"
-          className="bg-zinc-900 border border-zinc-800 h-6 px-2 text-xs w-16 focus:outline-none focus:border-[#FFB000] rounded-sm text-zinc-100"
-          value={draft.default_altitude}
-          onChange={(e) => setDraft({ ...draft, default_altitude: Number(e.target.value) })}
-        />
-        <label className="ml-2 text-[10px] font-mono text-zinc-500">SPD</label>
-        <input
-          data-testid="input-mission-speed"
-          type="number"
-          className="bg-zinc-900 border border-zinc-800 h-6 px-2 text-xs w-16 focus:outline-none focus:border-[#FFB000] rounded-sm text-zinc-100"
-          value={draft.default_speed}
-          onChange={(e) => setDraft({ ...draft, default_speed: Number(e.target.value) })}
-        />
+        <span className="ml-2 flex items-center gap-1 shrink-0">
+          <label className="text-[10px] font-mono text-zinc-500">ALT</label>
+          <input
+            data-testid="input-mission-alt"
+            type="number"
+            className="bg-zinc-900 border border-zinc-800 h-6 px-2 text-xs w-16 focus:outline-none focus:border-[#FFB000] rounded-sm text-zinc-100"
+            value={draft.default_altitude}
+            onChange={(e) => setDraft({ ...draft, default_altitude: Number(e.target.value) })}
+          />
+        </span>
+        <span className="ml-2 flex items-center gap-1 shrink-0">
+          <label className="text-[10px] font-mono text-zinc-500">SPD</label>
+          <input
+            data-testid="input-mission-speed"
+            type="number"
+            className="bg-zinc-900 border border-zinc-800 h-6 px-2 text-xs w-16 focus:outline-none focus:border-[#FFB000] rounded-sm text-zinc-100"
+            value={draft.default_speed}
+            onChange={(e) => setDraft({ ...draft, default_speed: Number(e.target.value) })}
+          />
+        </span>
 
-        <div className="flex-1" />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
         <Btn testid="btn-mp-upload" onClick={upload}><Upload className="w-3.5 h-3.5" /> Upload</Btn>
         <Btn testid="btn-mp-start" variant="primary" onClick={startMission}><Play className="w-3.5 h-3.5" /> Start</Btn>
         <Btn testid="btn-mp-pause" onClick={pauseMission}><Pause className="w-3.5 h-3.5" /> Pause</Btn>
         <Btn testid="btn-mp-resume" onClick={resumeMission}><StepForward className="w-3.5 h-3.5" /> Resume</Btn>
         <Btn testid="btn-mp-stop" variant="danger" onClick={stopMission}><Square className="w-3.5 h-3.5" /> Stop</Btn>
         <Btn testid="btn-mp-save" variant="cyan" onClick={saveToLibrary} disabled={saving}><Save className="w-3.5 h-3.5" /> Save</Btn>
-        <Btn testid="btn-mp-clear" onClick={clearWaypoints}><Trash2 className="w-3.5 h-3.5" /> Clear</Btn>
+        <Btn testid="btn-mp-clear" onClick={confirmClear} disabled={!draft.waypoints.length}><Trash2 className="w-3.5 h-3.5" /> Clear</Btn>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">

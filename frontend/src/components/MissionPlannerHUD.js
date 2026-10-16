@@ -2,10 +2,19 @@ import React, { useMemo } from "react";
 import { useActiveDrone } from "@/store/gcsStore";
 import { commandsApi } from "@/services/api";
 import { toast } from "sonner";
+import { linkState } from "@/utils/format";
 import { SlidersHorizontal } from "lucide-react";
+
+// Compass tape geometry: every tick spans 15° at PX_PER_DEG, so the tape can be
+// shifted by an exact pixel amount to put the current heading under the pointer.
+const PX_PER_DEG = 2;
+const TICK_DEG = 15;
+const TICK_W = TICK_DEG * PX_PER_DEG;
+const TAPE_START_DEG = -180;
 
 export default function MissionPlannerHUD({ className = "" }) {
   const drone = useActiveDrone();
+  const link = linkState(drone);
 
   const handleLevelHorizon = async () => {
     if (!drone) {
@@ -37,8 +46,8 @@ export default function MissionPlannerHUD({ className = "" }) {
   // Compass tape heading ticks
   const compassTape = useMemo(() => {
     const ticks = [];
-    const step = 15; // every 15 deg
-    for (let deg = -180; deg <= 540; deg += step) {
+    const step = TICK_DEG;
+    for (let deg = TAPE_START_DEG; deg <= 540; deg += step) {
       const normalized = (deg + 360) % 360;
       let label = `${normalized}`;
       if (normalized === 0) label = "N";
@@ -104,13 +113,16 @@ export default function MissionPlannerHUD({ className = "" }) {
       </div>
 
       {/* Top Compass Ribbon */}
-      <div className="absolute top-0 left-0 right-0 h-7 z-30 bg-black/60 border-b border-zinc-700/80 overflow-hidden flex items-center justify-center">
+      <div className="absolute top-0 left-0 right-0 h-7 z-30 bg-black/60 border-b border-zinc-700/80 overflow-hidden">
         <div
-          className="flex items-center gap-6 whitespace-nowrap transition-transform duration-100"
-          style={{ transform: `translateX(${-((heading % 360) * 2)}px)` }}
+          className="absolute top-0 left-1/2 h-full flex items-center whitespace-nowrap"
+          style={{
+            // Put the tick for the current heading exactly under the centre pointer
+            transform: `translateX(${-((((heading % 360) + 360) % 360 - TAPE_START_DEG) * PX_PER_DEG + TICK_W / 2)}px)`,
+          }}
         >
           {compassTape.map((t, idx) => (
-            <div key={idx} className="flex flex-col items-center min-w-[20px]">
+            <div key={idx} className="flex flex-col items-center shrink-0" style={{ width: TICK_W }}>
               <span className={`text-[10px] font-bold ${t.isCardinal ? "text-[#FFB000]" : "text-white"}`}>
                 {t.label}
               </span>
@@ -149,27 +161,28 @@ export default function MissionPlannerHUD({ className = "" }) {
 
       {/* Center Mission Planner Status Overlay Text */}
       <div className="absolute top-10 left-12 right-12 z-20 pointer-events-none text-center space-y-0.5">
-        {/* ARM STATUS BOLD BANNER */}
-        <div className="inline-block px-2 py-0.5 rounded-xs text-xs font-black tracking-widest text-shadow-md">
-          {armed ? (
+        {/* ARM / LINK STATUS BANNER — only real state, nothing invented */}
+        <div className="text-xs font-black tracking-widest">
+          {!drone ? (
+            <span className="bg-zinc-800/90 text-zinc-300 px-2 py-0.5">NO DRONE SELECTED</span>
+          ) : !link.ok ? (
+            <span className="bg-zinc-900/90 text-[#FF6685] border border-[#FF003C]/60 px-2 py-0.5">{link.label}</span>
+          ) : armed ? (
             <span className="bg-[#00FF41] text-black px-2 py-0.5">ARMED</span>
           ) : (
-            <div className="space-y-0.5">
-              <span className="bg-[#FF003C] text-white px-2 py-0.5">DISARMED</span>
-              <div className="text-[#FF003C] font-bold text-[11px] tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
-                FAILSAFE
-              </div>
-            </div>
+            <span className="bg-[#FF003C] text-white px-2 py-0.5">DISARMED</span>
           )}
         </div>
 
-        {/* Mode / PreArm warning lines */}
-        <div className="text-[#FFB000] font-bold text-xs drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
-          {flightMode}
-        </div>
-        {!armed && (
-          <div className="text-amber-300 text-[9px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)] font-semibold">
-            PreArm: Ready to Arm
+        {drone && (
+          <div className="text-[#FFB000] font-bold text-xs drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+            {flightMode}
+          </div>
+        )}
+        {drone && link.ok && drone.telemetry?.flight_state &&
+          !["ARMED", "DISARMED"].includes(drone.telemetry.flight_state) && (
+          <div className="text-zinc-100 text-[9px] font-semibold tracking-wider drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+            {drone.telemetry.flight_state.replace(/_/g, " ")}
           </div>
         )}
       </div>
@@ -189,8 +202,9 @@ export default function MissionPlannerHUD({ className = "" }) {
           <button
             type="button"
             onClick={handleLevelHorizon}
+            disabled={!drone}
             title="Level Horizon / Accel Calibration"
-            className="bg-zinc-800 hover:bg-[#FFB000] hover:text-black border border-zinc-600 px-1.5 py-0.5 text-[9px] text-zinc-200 font-bold uppercase transition-colors flex items-center gap-1"
+            className="bg-zinc-800 hover:bg-[#FFB000] hover:text-black disabled:opacity-40 disabled:hover:bg-zinc-800 disabled:hover:text-zinc-200 disabled:cursor-not-allowed border border-zinc-600 px-1.5 py-0.5 text-[9px] text-zinc-200 font-bold uppercase transition-colors flex items-center gap-1"
           >
             <SlidersHorizontal className="w-3 h-3" />
             Level

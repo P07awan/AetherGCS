@@ -1,6 +1,6 @@
 import React, { forwardRef } from "react";
 import { useGCS, useDroneList } from "@/store/gcsStore";
-import { statusDot } from "@/utils/format";
+import { statusDot, linkState, LINK_TONE_CLASS } from "@/utils/format";
 import { Plane, Battery, Wifi, WifiOff, SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MissionPlannerHUD from "@/components/MissionPlannerHUD";
@@ -58,6 +58,7 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
         {drones.map((d) => {
           const selected = selectedIds.includes(d.id);
           const active = d.id === activeId;
+          const link = linkState(d);
           return (
             <div
               key={d.id}
@@ -141,10 +142,15 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
                   </span>
                 </div>
                 <div className="text-zinc-500">
-                  MODE <span className="text-[#00F0FF]">{d.telemetry.flight_mode}</span>
+                  MODE <span className="text-[#00F0FF]">{d.telemetry?.flight_mode ?? "--"}</span>
                 </div>
                 <div className="text-right">
-                  {(() => {
+                  {!link.ok ? (
+                    // Not live: the last flight state would be stale and misleading
+                    <span data-testid={`drone-link-${d.id}`} className={`font-bold ${LINK_TONE_CLASS[link.tone]} ${link.tone === "warn" ? "animate-pulse" : ""}`}>
+                      {link.label}
+                    </span>
+                  ) : (() => {
                     const st = d.telemetry?.flight_state || (d.telemetry?.armed ? (d.telemetry?.altitude_relative > 1.0 ? "AIRBORNE" : "ARMED") : "DISARMED");
                     const color = st === "AIRBORNE" || st === "MISSION_ACTIVE"
                       ? "text-[#00F0FF] font-bold"
@@ -159,12 +165,16 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
                   })()}
                 </div>
               </div>
-              {d.status === "error" && d.last_error && (
+              {!link.ok && d.last_error && (
                 <div
-                  className="mt-1.5 pl-6 text-[9px] font-mono text-red-400 bg-red-950/40 border border-red-800/50 p-1 rounded-xs truncate"
+                  className={`mt-1.5 ml-6 text-[9px] font-mono p-1 rounded-xs line-clamp-2 break-words border ${
+                    link.tone === "warn"
+                      ? "text-amber-300 bg-amber-950/30 border-amber-800/50"
+                      : "text-red-300 bg-red-950/40 border-red-800/50"
+                  }`}
                   title={d.last_error}
                 >
-                  ERR: {d.last_error}
+                  {d.last_error}
                 </div>
               )}
             </div>
@@ -201,7 +211,9 @@ const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
 
       <div className="h-8 px-3 border-t border-zinc-700 bg-zinc-800/60 flex items-center justify-between font-mono text-[10px] text-zinc-300">
         <span data-testid="fleet-selected-count">SEL {selectedIds.length}</span>
-        <span>ACT {activeId ? activeId.slice(0, 6) : "--"}</span>
+        <span className="truncate max-w-[60%] text-right" title={activeId || ""}>
+          ACTIVE <span className="text-[#FFB000]">{drones.find((x) => x.id === activeId)?.name || "--"}</span>
+        </span>
       </div>
     </div>
   );

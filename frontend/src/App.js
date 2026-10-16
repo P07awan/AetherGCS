@@ -13,7 +13,10 @@ export default function App() {
       </BrowserRouter>
       <Toaster
         theme="dark"
-        position="top-right"
+        // Bottom-right, above the status bar: top-right covered Takeoff/Land
+        // and E-STOP while a toast was showing.
+        position="bottom-right"
+        offset={44}
         toastOptions={{
           style: {
             background: "#18181b",

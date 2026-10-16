@@ -1,10 +1,26 @@
+import { useEffect, useState } from "react";
 import { useGCS, useDroneList } from "@/store/gcsStore";
+import { linkState } from "@/utils/format";
+
+// Re-render every second on its own: the clock used to update only when
+// telemetry arrived, so it froze whenever nothing was flying.
+function useNow() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return now;
+}
 
 export default function StatusBar() {
   const wsStatus = useGCS((s) => s.wsStatus);
   const drones = useDroneList();
   const connected = drones.filter((d) => d.status === "connected").length;
   const armed = drones.filter((d) => d.telemetry?.armed).length;
+  const now = useNow();
+  // Drones that should be talking to us but aren't (exclude ones the operator disconnected)
+  const lost = drones.filter((d) => d.status !== "disconnected" && !linkState(d).ok);
   const low = drones.filter((d) => d.telemetry?.battery_percent != null && d.telemetry.battery_percent < 20 && d.status === "connected");
 
   return (
@@ -28,6 +44,15 @@ export default function StatusBar() {
         <span>FLEET: {drones.length}</span>
         <span className="text-[#00FF41]">CONN: {connected}</span>
         <span className="text-[#0088FF]">ARM: {armed}</span>
+        {lost.length > 0 && (
+          <span
+            className="text-[#FF003C] font-bold animate-pulse"
+            data-testid="status-link-lost"
+            title={lost.map((d) => `${d.name}: ${linkState(d).label}`).join(", ")}
+          >
+            NO LINK: {lost.length}
+          </span>
+        )}
         {low.length > 0 && (
           <span className="text-[#FF5500]" data-testid="status-low-battery">
             LOW-BAT: {low.length}
@@ -35,7 +60,7 @@ export default function StatusBar() {
         )}
       </div>
       <div className="flex items-center gap-4">
-        <span>{new Date().toISOString().replace("T", " ").slice(0, 19)}Z</span>
+        <span className="tabular-nums">{now.toISOString().replace("T", " ").slice(0, 19)}Z</span>
         <span className="text-[#FFB000]">AETHER GCS</span>
       </div>
     </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Polyline, Circle, useMap, useMapEvents } from "react-leaflet";
 import { useGCS, useDroneList, useActiveDrone } from "@/store/gcsStore";
+import { escapeHtml, linkState } from "@/utils/format";
 import { Crosshair, Navigation as NavIcon, Layers, Lock, Unlock } from "lucide-react";
 
 const MAP_PROVIDERS = {
@@ -32,17 +33,22 @@ const MAP_PROVIDERS = {
 };
 
 // Quadcopter Drone Icon with rotors, directional heading, and situational callout tag
-const quadcopterIcon = (heading, selected, armed, name = "", alt = null) => {
+// `link` = linkState(drone): a drone that isn't live is drawn greyed out with
+// its link state, so its last-known position is never mistaken for a live one.
+const quadcopterIcon = (heading, selected, armed, name = "", alt = null, link = { ok: true }) => {
   const altText = alt != null ? `${alt.toFixed(1)}m` : "";
-  const strokeColor = selected ? "#FFB000" : "#00F0FF";
-  const rotorColor = armed ? "#00FF41" : "#FF003C";
+  const live = link.ok !== false;
+  const strokeColor = !live ? "#71717A" : selected ? "#FFB000" : "#00F0FF";
+  const rotorColor = !live ? "#52525B" : armed ? "#00FF41" : "#FF003C";
+  const safeName = escapeHtml(name); // names are user input and every client renders them
+  const linkTag = live ? "" : ` · <span class="text-[#FF6685]">${escapeHtml(link.label)}</span>`;
   const labelHtml = name
     ? `<div class="absolute top-9 left-1/2 -translate-x-1/2 whitespace-nowrap px-1.5 py-0.5 rounded text-[9px] font-mono font-bold shadow-lg pointer-events-none transition-all ${
         selected
           ? "bg-zinc-950/90 text-[#FFB000] border border-[#FFB000]"
           : "bg-zinc-900/85 text-zinc-200 border border-zinc-700"
       }">
-        ${name}${altText ? ` · <span class="${armed ? "text-[#00FF41]" : "text-zinc-400"}">${altText}</span>` : ""}
+        ${safeName}${altText ? ` · <span class="${armed && live ? "text-[#00FF41]" : "text-zinc-400"}">${altText}</span>` : ""}${linkTag}
       </div>`
     : "";
 
@@ -50,7 +56,7 @@ const quadcopterIcon = (heading, selected, armed, name = "", alt = null) => {
     className: "",
     iconSize: [36, 36],
     iconAnchor: [18, 18],
-    html: `<div class="relative w-9 h-9 flex items-center justify-center">
+    html: `<div class="relative w-9 h-9 flex items-center justify-center${live ? "" : " opacity-60"}">
       <div class="w-9 h-9 flex items-center justify-center transition-transform duration-75" style="transform: rotate(${heading || 0}deg)">
         <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
           <line x1="6" y1="6" x2="26" y2="26" stroke="${strokeColor}" stroke-width="2.5" />
@@ -420,7 +426,8 @@ export default function DroneMap() {
                 d.id === activeId || selectedIds.includes(d.id),
                 d.telemetry?.armed ?? false,
                 `${d.name}${!hasGps ? " (No GPS)" : ""}`,
-                d.telemetry?.altitude_relative ?? null
+                d.telemetry?.altitude_relative ?? null,
+                linkState(d)
               )}
               eventHandlers={{
                 click: () => {
@@ -474,7 +481,7 @@ export default function DroneMap() {
       </MapContainer>
 
       {/* Top Left Instructions Overlay */}
-      <div className="absolute top-3 left-3 z-[500] bg-zinc-900/90 border border-zinc-700 px-3 py-1.5 backdrop-blur-xs transition-all">
+      <div className="absolute top-3 left-14 z-[500] bg-zinc-900/90 border border-zinc-700 px-3 py-1.5 backdrop-blur-xs transition-all">
         <div className="font-mono text-[10px] text-zinc-200">
           CLICK MAP TO ADD WAYPOINT (<span className="text-[#FFB000]">{draftWaypoints.length}</span>)
         </div>

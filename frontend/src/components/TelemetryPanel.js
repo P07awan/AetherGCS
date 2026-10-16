@@ -1,6 +1,6 @@
 import React, { forwardRef } from "react";
 import { useGCS, useActiveDrone } from "@/store/gcsStore";
-import { fmt, fmtLat, fmtLon, fmtDuration, statusDot } from "@/utils/format";
+import { fmt, fmtLat, fmtLon, fmtDuration, statusDot, linkState, LINK_TONE_CLASS } from "@/utils/format";
 import { Progress } from "@/components/ui/progress";
 import { Activity, Navigation, Satellite, Gauge } from "lucide-react";
 
@@ -48,6 +48,7 @@ const TelemetryPanel = forwardRef(({ style, className = "" }, ref) => {
   }
 
   const t = d.telemetry;
+  const link = linkState(d);
   const bat = t.battery_percent;
   const batKnown = bat != null;
   const batColor = !batKnown ? "text-zinc-400" : bat < 20 ? "text-[#FF5500]" : bat < 40 ? "text-[#FFB000]" : "text-[#00FF41]";
@@ -71,10 +72,25 @@ const TelemetryPanel = forwardRef(({ style, className = "" }, ref) => {
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      {!link.ok && (
+        <div
+          role="status"
+          data-testid="tlm-stale-banner"
+          className={`px-3 py-1.5 border-b font-mono text-[10px] leading-snug ${
+            link.tone === "warn"
+              ? "bg-amber-950/40 border-amber-800/60 text-amber-200"
+              : "bg-red-950/50 border-red-800/60 text-red-200"
+          }`}
+        >
+          <span className="font-bold">{link.label}</span> — values below are the last known
+          {t.heartbeat_ts ? ` (last packet ${t.heartbeat_ts.slice(11, 19)}Z)` : ""}, not live.
+        </div>
+      )}
+
+      <div className={`flex-1 overflow-y-auto ${link.ok ? "" : "opacity-60"}`}>
         <Section title="STATUS" icon={Activity}>
-          <Row label="Connection" value={d.status.toUpperCase()} testid="tlm-status"
-            accent={d.status === "connected" ? "text-[#00FF41]" : "text-[#FF003C]"} />
+          <Row label="Connection" value={link.label} testid="tlm-status"
+            accent={LINK_TONE_CLASS[link.tone]} />
           <Row
             label="Port / Link"
             value={

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Tabs, TabsList, TabsTrigger, TabsContent,
 } from "@/components/ui/tabs";
@@ -21,6 +21,36 @@ import { ResizeHandle } from "@/components/ResizeHandle";
 const LEFT   = { min: 50, default: 360, max: 600, field: "leftSidebarWidth" };
 const RIGHT  = { min: 50, default: 360, max: 650, field: "rightSidebarWidth" };
 const BOTTOM = { min: 50, default: 350, max: 1000, field: "missionPlannerHeight" };
+
+// Everything on screen comes from the telemetry WebSocket; when it drops, all
+// values silently freeze. Make that impossible to miss.
+function ServerLinkBanner() {
+  const wsStatus = useGCS((s) => s.wsStatus);
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (wsStatus === "open") {
+      setShow(false);
+      return undefined;
+    }
+    const t = setTimeout(() => setShow(true), 1500); // don't flash during the initial connect
+    return () => clearTimeout(t);
+  }, [wsStatus]);
+  if (!show) return null;
+  return (
+    <div
+      role="alert"
+      data-testid="server-link-banner"
+      className="shrink-0 px-4 py-1.5 bg-[#FF003C]/15 border-b border-[#FF003C]/60 text-[#FF6685] font-mono text-xs flex items-center gap-2"
+    >
+      <span className="w-2 h-2 rounded-full bg-[#FF003C] animate-pulse" />
+      <span className="font-bold tracking-wider">NO LIVE DATA</span>
+      <span className="text-zinc-300">
+        Connection to the GCS server {wsStatus === "connecting" ? "is being established" : "was lost"} — telemetry
+        shown is stale and commands may fail. Reconnecting automatically…
+      </span>
+    </div>
+  );
+}
 
 export default function GCSPage() {
   const setSnapshot = useGCS((s) => s.setSnapshot);
@@ -100,6 +130,7 @@ export default function GCSPage() {
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
       <TopToolbar />
+      <ServerLinkBanner />
       <div className="flex-1 flex overflow-hidden">
         
         {/* Left Sidebar */}

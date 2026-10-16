@@ -31,3 +31,40 @@ export const statusDot = (drone) => {
   if (drone.telemetry?.armed) return "bg-[#0088FF] animate-pulse-glow";
   return "bg-[#00FF41]";
 };
+
+/**
+ * Link health of a drone as an operator should read it. When `ok` is false the
+ * telemetry on screen is NOT live (stale values from the last packet).
+ *   tone: "ok" | "warn" | "bad" | "off"
+ */
+export const linkState = (drone) => {
+  if (!drone) return { ok: false, label: "NO DRONE", tone: "off" };
+  const err = drone.last_error || "";
+  switch (drone.status) {
+    case "connected":
+      return drone.telemetry?.heartbeat === false
+        ? { ok: false, label: "LINK LOST", tone: "bad" }
+        : { ok: true, label: "LIVE", tone: "ok" };
+    case "connecting":
+      return err
+        ? { ok: false, label: "RECONNECTING", tone: "warn" }
+        : { ok: false, label: "CONNECTING", tone: "warn" };
+    case "error":
+      return /link lost/i.test(err)
+        ? { ok: false, label: "LINK LOST", tone: "bad" }
+        : { ok: false, label: "ERROR", tone: "bad" };
+    default:
+      return { ok: false, label: "OFFLINE", tone: "off" };
+  }
+};
+
+export const LINK_TONE_CLASS = {
+  ok: "text-[#00FF41]",
+  warn: "text-[#FFB000]",
+  bad: "text-[#FF003C]",
+  off: "text-zinc-500",
+};
+
+/** Escape text for insertion into HTML strings (Leaflet divIcon markup). */
+export const escapeHtml = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
