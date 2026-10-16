@@ -44,7 +44,7 @@ function isAirborne(state) {
 // Styled button component
 // ---------------------------------------------------------------------------
 
-const IconBtn = ({ label, onClick, testid, variant = "default", disabled, children }) => {
+const IconBtn = ({ label, title, onClick, testid, variant = "default", disabled, children }) => {
   const base =
     "h-9 px-3 flex items-center gap-2 text-xs font-medium tracking-wide uppercase rounded-sm border transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
   const styles = {
@@ -60,7 +60,7 @@ const IconBtn = ({ label, onClick, testid, variant = "default", disabled, childr
       data-testid={testid}
       onClick={onClick}
       disabled={disabled}
-      title={label}
+      title={title || label}
       className={`${base} ${styles}`}
     >
       {children}

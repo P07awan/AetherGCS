@@ -38,28 +38,39 @@ export const useGCS = create((set, get) => ({
   toggleLevelCard: () => set((s) => ({ levelCardOpen: !s.levelCardOpen })),
 
   setSnapshot: (list) => {
+    const safeList = Array.isArray(list) ? list : [];
     const map = {};
-    list.forEach((d) => (map[d.id] = d));
-    const nextActive = get().activeDroneId || (list[0]?.id ?? null);
+    safeList.forEach((d) => {
+      if (d && d.id) map[d.id] = d;
+    });
+    const currentActive = get().activeDroneId;
+    const nextActive = (currentActive && map[currentActive]) ? currentActive : (safeList[0]?.id ?? null);
     set((s) => {
-      const next = { ...s, drones: map, activeDroneId: nextActive };
+      // Drop selections of drones that disappeared (e.g. deleted while the WS was down).
+      const selectedDroneIds = (s.selectedDroneIds || []).filter((id) => map[id]);
+      const next = { ...s, drones: map, activeDroneId: nextActive, selectedDroneIds };
       return { ...next, ..._syncDraft(next) };
     });
   },
 
-  upsertDrone: (d) =>
+  upsertDrone: (d) => {
+    if (!d || !d.id) return;
     set((s) => {
-      const nextActive = s.activeDroneId || d.id;
-      const next = { ...s, drones: { ...s.drones, [d.id]: d }, activeDroneId: nextActive };
-      return { ...next, ..._syncDraft(next) };
-    }),
+      const drones = { ...s.drones, [d.id]: d };
+      if (s.activeDroneId) return { drones };
+      // First drone becomes active: switch the visible draft to its key too,
+      // otherwise edits go to the drone's draft while the old one is displayed.
+      const next = { ...s, drones, activeDroneId: d.id };
+      return { drones, activeDroneId: d.id, ..._syncDraft(next) };
+    });
+  },
 
   removeDrone: (id) =>
     set((s) => {
-      const { [id]: _, ...rest } = s.drones;
-      const { [id]: __, ...restMissions } = s.draftMissions;
+      const { [id]: _, ...rest } = s.drones || {};
+      const { [id]: __, ...restMissions } = s.draftMissions || {};
       const nextActive = s.activeDroneId === id ? Object.keys(rest)[0] || null : s.activeDroneId;
-      const nextSelected = s.selectedDroneIds.filter((x) => x !== id);
+      const nextSelected = (s.selectedDroneIds || []).filter((x) => x !== id);
       const next = { ...s, drones: rest, selectedDroneIds: nextSelected, activeDroneId: nextActive };
       return { ...next, ..._syncDraft(next, restMissions) };
     }),

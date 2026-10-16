@@ -23,18 +23,37 @@ export default function MissionLibraryDialog({ open, onOpenChange }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (open) refresh(); }, [open]);
 
+  // Waypoints are edited/removed by `seq`, so it must be a unique 0..n-1 sequence.
+  const renumber = (wps) => (Array.isArray(wps) ? wps : []).map((w, i) => ({ ...w, seq: i }));
+
   const load = (m) => {
     setDraft({
       id: m.id, name: m.name, description: m.description,
       default_altitude: m.default_altitude, default_speed: m.default_speed,
-      waypoints: m.waypoints,
+      waypoints: renumber(m.waypoints),
     });
     toast.success(`Loaded: ${m.name}`);
     onOpenChange(false);
   };
 
-  const del = async (id) => { await missionsApi.remove(id); await refresh(); toast.message("Mission deleted"); };
-  const dup = async (id) => { await missionsApi.duplicate(id); await refresh(); toast.success("Duplicated"); };
+  const del = async (id) => {
+    try {
+      await missionsApi.remove(id);
+      await refresh();
+      toast.message("Mission deleted");
+    } catch (e) {
+      toast.error(`Delete failed: ${e.response?.data?.detail || e.message}`);
+    }
+  };
+  const dup = async (id) => {
+    try {
+      await missionsApi.duplicate(id);
+      await refresh();
+      toast.success("Duplicated");
+    } catch (e) {
+      toast.error(`Duplicate failed: ${e.response?.data?.detail || e.message}`);
+    }
+  };
 
   const exportMission = (m) => {
     const blob = new Blob([JSON.stringify(m, null, 2)], { type: "application/json" });
@@ -57,7 +76,7 @@ export default function MissionLibraryDialog({ open, onOpenChange }) {
         description: data.description || "",
         default_altitude: data.default_altitude || 20,
         default_speed: data.default_speed || 5,
-        waypoints: data.waypoints || [],
+        waypoints: renumber(data.waypoints),
       });
       await refresh();
       toast.success("Mission imported");

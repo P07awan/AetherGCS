@@ -62,6 +62,9 @@ export default function GCSPage() {
 
   // Initial data + WS
   useEffect(() => {
+    // The WS snapshot is newer than (or as new as) the REST list; never let a
+    // slower REST response overwrite it.
+    let gotWsSnapshot = false;
     (async () => {
       try {
         const [drones, history, missions] = await Promise.all([
@@ -69,8 +72,11 @@ export default function GCSPage() {
           commandsApi.history(200),
           missionsApi.list(),
         ]);
-        setSnapshot(drones);
-        setCommandHistory(history);
+        if (!gotWsSnapshot) setSnapshot(drones);
+        // Keep command events that arrived over the WS while REST was loading.
+        const seen = new Set(history.map((h) => h.id));
+        const live = useGCS.getState().commandHistory.filter((h) => !seen.has(h.id));
+        setCommandHistory([...live, ...history]);
         setMissions(missions);
       } catch (e) {
         console.error("Initial load failed", e);
@@ -78,7 +84,10 @@ export default function GCSPage() {
     })();
 
     const socket = createTelemetrySocket({
-      onSnapshot: setSnapshot,
+      onSnapshot: (list) => {
+        gotWsSnapshot = true;
+        setSnapshot(list);
+      },
       onDrone: upsertDrone,
       onDroneRemoved: (msg) => removeDrone(msg.id),
       onCommand: addCommandLog,

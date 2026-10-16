@@ -2,7 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { commandsApi, missionsApi } from "@/services/api";
 import { useGCS, useSelectedDrones } from "@/store/gcsStore";
-import { Trash2, Save, Play, Pause, Square, Upload, Route as RouteIcon, PlusCircle, ArrowUp, ArrowDown } from "lucide-react";
+import { Trash2, Save, Play, Pause, StepForward, Square, Upload, Route as RouteIcon, PlusCircle, ArrowUp, ArrowDown } from "lucide-react";
 
 const Btn = ({ children, onClick, testid, variant = "default", disabled }) => {
   const styles = {
@@ -63,16 +63,36 @@ export default function MissionPlanner() {
 
   const pauseMission = async () => {
     const ids = targetIds();
-    if (!ids.length) return;
-    await commandsApi.send(ids, "pause_mission", {});
-    toast.message("Mission paused");
+    if (!ids.length) return toast.error("Select a drone");
+    try {
+      await commandsApi.send(ids, "pause_mission", {});
+      toast.message("Mission paused");
+    } catch (e) {
+      toast.error(`Pause failed: ${e.response?.data?.detail || e.message}`);
+    }
+  };
+
+  // Continue from the current item (Start would restart from waypoint 1 on a real FC).
+  const resumeMission = async () => {
+    const ids = targetIds();
+    if (!ids.length) return toast.error("Select a drone");
+    try {
+      await commandsApi.send(ids, "resume_mission", {});
+      toast.success("Mission resumed");
+    } catch (e) {
+      toast.error(`Resume failed: ${e.response?.data?.detail || e.message}`);
+    }
   };
 
   const stopMission = async () => {
     const ids = targetIds();
-    if (!ids.length) return;
-    await commandsApi.send(ids, "stop_mission", {});
-    toast.warning("Mission stopped");
+    if (!ids.length) return toast.error("Select a drone");
+    try {
+      await commandsApi.send(ids, "stop_mission", {});
+      toast.warning("Mission stopped");
+    } catch (e) {
+      toast.error(`Stop failed: ${e.response?.data?.detail || e.message}`);
+    }
   };
 
   const saveToLibrary = async () => {
@@ -157,6 +177,7 @@ export default function MissionPlanner() {
         <Btn testid="btn-mp-upload" onClick={upload}><Upload className="w-3.5 h-3.5" /> Upload</Btn>
         <Btn testid="btn-mp-start" variant="primary" onClick={startMission}><Play className="w-3.5 h-3.5" /> Start</Btn>
         <Btn testid="btn-mp-pause" onClick={pauseMission}><Pause className="w-3.5 h-3.5" /> Pause</Btn>
+        <Btn testid="btn-mp-resume" onClick={resumeMission}><StepForward className="w-3.5 h-3.5" /> Resume</Btn>
         <Btn testid="btn-mp-stop" variant="danger" onClick={stopMission}><Square className="w-3.5 h-3.5" /> Stop</Btn>
         <Btn testid="btn-mp-save" variant="cyan" onClick={saveToLibrary} disabled={saving}><Save className="w-3.5 h-3.5" /> Save</Btn>
         <Btn testid="btn-mp-clear" onClick={clearWaypoints}><Trash2 className="w-3.5 h-3.5" /> Clear</Btn>
@@ -213,8 +234,12 @@ export default function MissionPlanner() {
                       <option value="rtl" className="bg-zinc-900 text-cyan-400 font-bold">RTL</option>
                     </select>
                   </td>
-                  <td className="px-3 py-1.5 text-right text-zinc-300">{wp.latitude.toFixed(6)}</td>
-                  <td className="px-3 py-1.5 text-right text-zinc-300">{wp.longitude.toFixed(6)}</td>
+                  <td className="px-3 py-1.5 text-right text-zinc-300">
+                    {wp.latitude != null && !isNaN(wp.latitude) ? Number(wp.latitude).toFixed(6) : "--"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-zinc-300">
+                    {wp.longitude != null && !isNaN(wp.longitude) ? Number(wp.longitude).toFixed(6) : "--"}
+                  </td>
                   <td className="px-3 py-1.5 text-right">
                     <input
                       data-testid={`wp-alt-${wp.seq}`}

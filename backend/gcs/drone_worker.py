@@ -49,26 +49,57 @@ def _bearing_meters(lat1, lon1, lat2, lon2) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 _ARDUPILOT_MODE_MAP: dict[int, str] = {
     0: "STABILIZE",
+    1: "ACRO",
     2: "ALT_HOLD",
     3: "AUTO",
     4: "GUIDED",
     5: "LOITER",
     6: "RTL",
+    7: "CIRCLE",
     9: "LAND",
+    11: "DRIFT",
+    13: "SPORT",
+    15: "AUTOTUNE",
     16: "POSHOLD",
-    19: "MANUAL",
+    17: "BRAKE",
+    18: "THROW",
+    19: "AVOID_ADSB",
+    20: "GUIDED_NOGPS",
+    21: "SMART_RTL",
 }
 
 _PX4_MODE_MAP: dict[int, str] = {
-    # main_mode (byte 1 of custom_mode uint32)
+    # main_mode (byte 2 of custom_mode uint32)
     1: "MANUAL",
-    2: "STABILIZE",
-    3: "POSHOLD",
-    4: "AUTO",
-    6: "LOITER",
-    7: "RTL",
-    8: "AUTO",  # MISSION
+    2: "ALT_HOLD",   # ALTCTL
+    3: "POSHOLD",    # POSCTL
+    4: "AUTO",       # refined by sub_mode below
+    5: "ACRO",
+    6: "GUIDED",     # OFFBOARD
+    7: "STABILIZE",  # STABILIZED
 }
+
+_PX4_AUTO_SUB_MODE_MAP: dict[int, str] = {
+    # sub_mode (byte 3 of custom_mode) when main_mode == AUTO
+    2: "GUIDED",  # TAKEOFF
+    3: "LOITER",
+    4: "AUTO",    # MISSION
+    5: "RTL",
+    6: "LAND",
+    9: "LAND",    # PRECLAND
+}
+
+# MAV_TYPE_GCS / MAV_AUTOPILOT_INVALID — heartbeats from GCSs, gimbals,
+# companion computers etc. that share the drone's system ID.
+_MAV_TYPE_GCS = 6
+_MAV_AUTOPILOT_INVALID = 8
+
+
+def _is_autopilot_heartbeat(hb) -> bool:
+    return (
+        getattr(hb, "autopilot", None) != _MAV_AUTOPILOT_INVALID
+        and getattr(hb, "type", None) != _MAV_TYPE_GCS
+    )
 
 
 def _ardupilot_mode_str(custom_mode: int) -> str:
@@ -77,6 +108,9 @@ def _ardupilot_mode_str(custom_mode: int) -> str:
 
 def _px4_mode_str(custom_mode: int) -> str:
     main = (custom_mode >> 16) & 0xFF
+    if main == 4:
+        sub = (custom_mode >> 24) & 0xFF
+        return _PX4_AUTO_SUB_MODE_MAP.get(sub, "AUTO")
     return _PX4_MODE_MAP.get(main, f"MODE_{main}")
 
 
@@ -321,6 +355,10 @@ class SimulatorWorker(DroneWorker):
         self.drone.telemetry.flight_mode = "LOITER"
         self._velocity_body = [0.0, 0.0, 0.0]
         self._yaw_rate = 0.0
+        # Leaving AUTO suspends the mission (resume by switching back to AUTO),
+        # otherwise the next tick would steer the drone again.
+        self._mission_running = False
+        self._rtl_active = False
         # Only update to AIRBORNE if we're actually in the air
         if self.drone.telemetry.altitude_relative > 0.5:
             self.drone.telemetry.flight_state = "AIRBORNE"
@@ -347,10 +385,15 @@ class SimulatorWorker(DroneWorker):
         self.on_update(self.drone)
 
     async def set_velocity(self, forward: float, right: float, up: float, yaw_rate: float) -> None:
+        """Body-frame velocity in m/s; yaw_rate in rad/s (as sent by the UI)."""
         self._velocity_body = [forward, right, up]
-        self._yaw_rate = yaw_rate
+        self._yaw_rate = math.degrees(yaw_rate)  # tick integrates heading in deg/s
         if self.drone.telemetry.flight_mode not in ("GUIDED", "LOITER"):
+            # Like ArduPilot: velocity control switches to GUIDED, which ends
+            # AUTO / RTL so they stop overriding the setpoint every tick.
             self.drone.telemetry.flight_mode = "GUIDED"
+            self._mission_running = False
+            self._rtl_active = False
         if self.drone.telemetry.altitude_relative > 0.5 and self.drone.telemetry.flight_state != "MISSION_ACTIVE":
             self.drone.telemetry.flight_state = "AIRBORNE"
         self.on_update(self.drone)
@@ -370,9 +413,12 @@ class SimulatorWorker(DroneWorker):
             raise RuntimeError(
                 "Drone is not armed. ARM the drone before starting a mission."
             )
+        if self._mission_index >= len(self._mission):
+            self._mission_index = 0  # restart a completed mission
         self.drone.telemetry.flight_mode = "AUTO"
         self._mission_running = True
         self._mission_paused = False
+        self._rtl_active = False
         self.drone.telemetry.flight_state = "MISSION_ACTIVE"
         self.on_update(self.drone)
 
@@ -389,6 +435,11 @@ class SimulatorWorker(DroneWorker):
         self._mission_running = False
         self._mission_paused = False
         self._velocity_body = [0.0, 0.0, 0.0]
+        t = self.drone.telemetry
+        if t.flight_mode == "AUTO":
+            t.flight_mode = "LOITER"
+        if t.armed:
+            t.flight_state = "AIRBORNE" if t.altitude_relative > 0.5 else "ARMED"
         self.on_update(self.drone)
 
     async def clear_mission(self) -> None:
@@ -404,6 +455,11 @@ class SimulatorWorker(DroneWorker):
         if m not in VALID:
             raise ValueError(f"Simulator: unknown mode '{mode}'. Valid: {', '.join(sorted(VALID))}")
         self.drone.telemetry.flight_mode = m
+        if m != "AUTO":
+            # Any non-AUTO mode suspends the mission; switching back resumes it.
+            self._mission_running = False
+            if m != "RTL":
+                self._rtl_active = False
         # Stop velocity so the mode change takes effect visually
         if m in ("LOITER", "STABILIZE", "ALT_HOLD", "POSHOLD", "GUIDED"):
             self._velocity_body = [0.0, 0.0, 0.0]
@@ -448,8 +504,12 @@ class SimulatorWorker(DroneWorker):
         # mission autopilot
         if self._mission_running and not self._mission_paused and self._mission:
             if self._mission_index >= len(self._mission):
+                # Mission complete: hover in place instead of coasting on the
+                # last leg's velocity forever.
                 self._mission_running = False
+                self._velocity_body = [0.0, 0.0, 0.0]
                 t.flight_mode = "LOITER"
+                t.flight_state = "AIRBORNE" if t.altitude_relative > 0.5 else "ARMED"
             else:
                 wp = self._mission[self._mission_index]
                 action = (getattr(wp, "action", "waypoint") or "waypoint").lower()
@@ -499,13 +559,20 @@ class SimulatorWorker(DroneWorker):
             t.heading = brng
             if dist < 2.0:
                 t.flight_mode = "LAND"
+                t.flight_state = "LANDING"
                 self._velocity_body = [0.0, 0.0, -1.5]
             else:
                 up_v = 1.5 if t.altitude_relative < 15.0 else 0.0
                 self._velocity_body = [min(8.0, max(dist * 0.5, 1.0)), 0.0, up_v]
 
-        # takeoff auto-level: stop climbing and transition to AIRBORNE
-        if t.flight_state == "TAKING_OFF" and t.altitude_relative >= self._takeoff_target:
+        # takeoff auto-level: stop climbing and transition to AIRBORNE.
+        # Skipped during a mission — its TAKEOFF item climbs to its own
+        # altitude, and leveling at the manual-takeoff target would stall it.
+        if (
+            t.flight_state == "TAKING_OFF"
+            and not self._mission_running
+            and t.altitude_relative >= self._takeoff_target
+        ):
             self._velocity_body[2] = 0.0
             t.flight_mode = "LOITER"
             t.flight_state = "AIRBORNE"
@@ -587,6 +654,17 @@ class MavlinkWorker(DroneWorker):
         self._ack_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         # Last STATUSTEXT lines (ring buffer) — captures pre-arm check failures
         self._recent_statustext: list[str] = []
+        # Clean any historical dummy coordinates or Null Island points from trail
+        self.drone.trail = [
+            p for p in (self.drone.trail or [])
+            if (abs(p[0]) > 0.0001 or abs(p[1]) > 0.0001)
+            and not (abs(p[0] - 59.2577) < 0.05 and abs(p[1] - 6.2538) < 0.05)
+        ]
+        # Clean dummy Norway coordinates from current telemetry if no GPS fix
+        t = self.drone.telemetry
+        if (t.gps_fix is None or t.gps_fix < 2 or t.satellites == 0) and abs(t.latitude - 59.2577) < 0.05:
+            t.latitude = 0.0
+            t.longitude = 0.0
 
     # ---- connection string -------------------------------------------------
     def _connection_string(self) -> str:
@@ -619,6 +697,11 @@ class MavlinkWorker(DroneWorker):
     async def connect(self) -> None:
         if self._running:
             return
+        # A background reconnect loop may still be retrying; stop it so it
+        # doesn't open a second link on the same port or get orphaned when
+        # self._task is overwritten below.
+        await self._cancel_reconnect()
+        await self._close_mav()
         self.drone.status = "connecting"
         self.drone.last_error = None
         self.on_update(self.drone)
@@ -670,17 +753,29 @@ class MavlinkWorker(DroneWorker):
                     pass
         self._task = self._hb_task = self._rx_task = None
 
-        loop = asyncio.get_running_loop()
-        if self._mav:
-            try:
-                await loop.run_in_executor(None, self._mav.close)
-            except Exception:
-                pass
-            self._mav = None
+        await self._close_mav()
 
         self.drone.status = "disconnected"
         self.drone.telemetry.heartbeat = False
         self.on_update(self.drone)
+
+    async def _cancel_reconnect(self) -> None:
+        t = self._task
+        if t and not t.done() and t is not asyncio.current_task():
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._task = None
+
+    async def _close_mav(self) -> None:
+        mav, self._mav = self._mav, None
+        if mav:
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, mav.close)
+            except Exception:
+                pass
 
     # ---- internal link setup -----------------------------------------------
     async def _open_link(self) -> None:
@@ -749,7 +844,7 @@ class MavlinkWorker(DroneWorker):
             start_t = time.time()
             while time.time() - start_t < self.CONNECT_TIMEOUT:
                 hb_candidate = mav.wait_heartbeat(timeout=1.0)
-                if hb_candidate is None:
+                if hb_candidate is None or not _is_autopilot_heartbeat(hb_candidate):
                     continue
                 src = hb_candidate.get_srcSystem()
                 if auto_detect:
@@ -760,6 +855,13 @@ class MavlinkWorker(DroneWorker):
                     )
                     return hb_candidate
                 if src == expected_sysid:
+                    return hb_candidate
+                if ct == "serial":
+                    # On dedicated point-to-point serial cable, lock onto the hardware's sysid
+                    logger.info(
+                        "[Drone %s] serial link: heartbeat_received sysid=%s (logical sysid=%s) — locking on",
+                        self.drone.id, src, expected_sysid,
+                    )
                     return hb_candidate
                 # Log mismatched heartbeats so operators can diagnose cross-talk
                 logger.warning(
@@ -782,16 +884,17 @@ class MavlinkWorker(DroneWorker):
             )
 
         self._mav = mav
-        # Lock target_system to this drone's system_id
+        # Lock target_system to this drone's hardware system_id
         src_sys = hb.get_srcSystem()
+        self._hardware_sysid = src_sys
         if auto_detect:
             # Discovery: update drone model with the discovered sysid
             self.drone.system_id = src_sys
-        mav.target_system = self.drone.system_id
+        mav.target_system = src_sys
 
         # populate firmware / autopilot info from heartbeat
         autopilot = getattr(hb, "autopilot", 3)
-        fw_names  = {3: "ArduPilot", 12: "PX4", 8: "SLUGS", 0: "Generic"}
+        fw_names  = {3: "ArduPilot", 12: "PX4", 2: "SLUGS", 0: "Generic"}
         fw_label  = fw_names.get(autopilot, f"AP_{autopilot}")
         self.drone.firmware = f"{fw_label} (live)"
         logger.info(
@@ -907,7 +1010,8 @@ class MavlinkWorker(DroneWorker):
         src_sys_fn = getattr(msg, "get_srcSystem", None)
         if callable(src_sys_fn):
             src_sys = src_sys_fn()
-            if src_sys != self.drone.system_id:
+            target_sys = getattr(self, "_hardware_sysid", self.drone.system_id)
+            if src_sys != target_sys:
                 # Silently drop — expected in multi-drone setups.
                 # Mismatches are logged at WARNING during _wait_hb(); no need
                 # to spam the log on every telemetry packet.
@@ -917,6 +1021,10 @@ class MavlinkWorker(DroneWorker):
         typ = msg.get_type()
 
         if typ == "HEARTBEAT":
+            # Gimbals, companion computers and GCSs can share the drone's
+            # system ID; their heartbeats carry no armed/mode state.
+            if not _is_autopilot_heartbeat(msg):
+                return
             t.heartbeat    = True
             t.heartbeat_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             t.armed        = bool(msg.base_mode & 0x80)  # MAV_MODE_FLAG_SAFETY_ARMED
@@ -937,21 +1045,33 @@ class MavlinkWorker(DroneWorker):
             self.on_update(self.drone)
 
         elif typ == "GLOBAL_POSITION_INT":
-            t.latitude          = msg.lat  / 1e7
-            t.longitude         = msg.lon  / 1e7
+            raw_lat = msg.lat / 1e7
+            raw_lon = msg.lon / 1e7
+            is_dummy_px4 = (abs(raw_lat - 59.2577) < 0.05 and abs(raw_lon - 6.2538) < 0.05)
+            has_no_fix = (t.gps_fix is not None and t.gps_fix < 2) or (t.satellites is not None and t.satellites == 0)
+
+            if is_dummy_px4 and has_no_fix:
+                t.latitude = 0.0
+                t.longitude = 0.0
+            elif (raw_lat != 0.0 or raw_lon != 0.0) and not (is_dummy_px4 and has_no_fix):
+                t.latitude = raw_lat
+                t.longitude = raw_lon
+
             t.altitude_msl      = msg.alt  / 1000.0
             t.altitude_relative = msg.relative_alt / 1000.0
             # Update flight_state based on altitude change —
             # catches TAKING_OFF → AIRBORNE as the drone climbs
             _update_flight_state_from_telemetry(t)
-            # trail point
+            # trail point (only record when there is a valid GPS fix!)
             d = self.drone
-            if not d.trail or _bearing_meters(
-                d.trail[-1][0], d.trail[-1][1], t.latitude, t.longitude
-            )[0] > 1.0:
-                d.trail.append([t.latitude, t.longitude])
-                if len(d.trail) > 500:
-                    d.trail.pop(0)
+            has_valid_fix = (t.gps_fix is not None and t.gps_fix >= 2 and (t.satellites or 0) > 0)
+            if has_valid_fix and (abs(t.latitude) > 0.0001 or abs(t.longitude) > 0.0001) and not is_dummy_px4:
+                if not d.trail or _bearing_meters(
+                    d.trail[-1][0], d.trail[-1][1], t.latitude, t.longitude
+                )[0] > 1.0:
+                    d.trail.append([t.latitude, t.longitude])
+                    if len(d.trail) > 500:
+                        d.trail.pop(0)
             self.on_update(self.drone)
 
         elif typ == "GPS_RAW_INT":
@@ -966,9 +1086,14 @@ class MavlinkWorker(DroneWorker):
             else:
                 t.hdop = None
             if t.latitude == 0.0:
-                t.latitude  = msg.lat / 1e7
-                t.longitude = msg.lon / 1e7
-                t.altitude_msl = msg.alt / 1000.0
+                raw_lat = msg.lat / 1e7
+                raw_lon = msg.lon / 1e7
+                is_dummy_px4 = (abs(raw_lat - 59.2577) < 0.05 and abs(raw_lon - 6.2538) < 0.05)
+                has_no_fix = (t.gps_fix is not None and t.gps_fix < 2) or (t.satellites is not None and t.satellites == 0)
+                if (raw_lat != 0.0 or raw_lon != 0.0) and not (is_dummy_px4 and has_no_fix):
+                    t.latitude  = raw_lat
+                    t.longitude = raw_lon
+                    t.altitude_msl = msg.alt / 1000.0
             self.on_update(self.drone)
 
         elif typ == "GPS2_RAW":
@@ -1112,6 +1237,9 @@ class MavlinkWorker(DroneWorker):
             self.on_update(self.drone)
             await asyncio.sleep(self.RECONNECT_DELAY)
             try:
+                # Release the dropped link first — a UDP listener still bound
+                # to the port makes the new bind fail with "address in use".
+                await self._close_mav()
                 await self._open_link()
                 self._running = True
                 self.drone.status = "connected"
@@ -1434,13 +1562,16 @@ class MavlinkWorker(DroneWorker):
         logger.warning("EMERGENCY STOP sent to %s", self.drone.name)
 
     async def level_horizon(self) -> None:
-        """Send MAV_CMD_PREFLIGHT_CALIBRATION (param5=1) to level accelerometers / horizon."""
+        """Send MAV_CMD_PREFLIGHT_CALIBRATION (param5=2, board level) to level the horizon.
+
+        param5=1 would start the full 6-orientation accelerometer calibration instead.
+        """
         self._require_mav()
         await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: self._send_command_long(
                 241,  # MAV_CMD_PREFLIGHT_CALIBRATION
-                0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0
+                0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0
             ),
         )
         logger.info("LEVEL HORIZON sent to %s", self.drone.name)
@@ -1458,9 +1589,9 @@ class MavlinkWorker(DroneWorker):
             except Exception:
                 pass
 
-        # type_mask: bits 0-2 ignore position, bits 3-5 use velocity, bits 6-8 ignore accel,
-        # bit 10 use yaw_rate. Value 0b110000111000 = 0x0FC7 (ignore pos+accel, use vel+yaw_rate)
-        type_mask = 0x0FC7  # ignore pos (bits 0-2) + accel (bits 6-8), use vx/vy/vz + yaw_rate
+        # type_mask: bits 0-2 ignore position, bits 6-8 ignore accel, bit 10 ignore yaw.
+        # Bits 3-5 (velocity) and bit 11 (yaw_rate) stay clear so both are used.
+        type_mask = 0x05C7
 
         # Convert body-frame to NED by using current heading
         hdg = math.radians(self.drone.telemetry.heading)
@@ -1479,7 +1610,7 @@ class MavlinkWorker(DroneWorker):
                 0, 0, 0,        # position (ignored)
                 vx, vy, vz,     # velocity m/s
                 0, 0, 0,        # acceleration (ignored)
-                0, math.radians(yaw_rate),  # yaw, yaw_rate
+                0, float(yaw_rate),  # yaw (ignored), yaw_rate in rad/s
             ),
         )
 
@@ -1609,6 +1740,14 @@ class MavlinkWorker(DroneWorker):
                 "alt": alt,
             })
 
+        # MISSION_ITEM (float lat/lon) and MISSION_ITEM_INT require the matching
+        # frame variant; PX4 rejects an _INT frame inside a float MISSION_ITEM.
+        _float_frame = {
+            _mu.mavlink.MAV_FRAME_GLOBAL_INT: _mu.mavlink.MAV_FRAME_GLOBAL,
+            _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT: _mu.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+        }
+        _int_frame = {v: k for k, v in _float_frame.items()}
+
         count = len(items_to_send)
         logger.info("Mission upload started: sending %d items (home + %d waypoints)", count, len(waypoints))
 
@@ -1646,7 +1785,7 @@ class MavlinkWorker(DroneWorker):
                                 self._mav.target_system,
                                 self._mav.target_component,
                                 s,                                      # seq
-                                item["frame"],
+                                _float_frame.get(item["frame"], item["frame"]),
                                 item["command"],
                                 0,                                      # current
                                 1,                                      # auto-continue
@@ -1667,7 +1806,7 @@ class MavlinkWorker(DroneWorker):
                                 self._mav.target_system,
                                 self._mav.target_component,
                                 s,                                      # seq
-                                item["frame"],
+                                _int_frame.get(item["frame"], item["frame"]),
                                 item["command"],
                                 0,                                      # current
                                 1,                                      # auto-continue

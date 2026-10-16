@@ -24,16 +24,31 @@ export default function SurveyGridDialog({ open, onOpenChange }) {
       return;
     }
 
-    const homeLat = activeDrone.telemetry.latitude || activeDrone.home_lat;
-    const homeLon = activeDrone.telemetry.longitude || activeDrone.home_lon;
+    const homeLat = (activeDrone.telemetry?.latitude && Math.abs(activeDrone.telemetry.latitude) > 0.0001)
+      ? activeDrone.telemetry.latitude
+      : (activeDrone.home_lat ?? 28.6769);
+    const homeLon = (activeDrone.telemetry?.longitude && Math.abs(activeDrone.telemetry.longitude) > 0.0001)
+      ? activeDrone.telemetry.longitude
+      : (activeDrone.home_lon ?? 77.5020);
 
     // Convert meters to lat/lon degrees (approx)
     const latMeters = 111139;
     const lonMeters = 111139 * Math.cos((homeLat * Math.PI) / 180);
 
+    const spacing = Number(spacingMeters);
+    if (!(spacing > 0) || !(Number(lengthMeters) > 0) || !(Number(widthMeters) > 0)) {
+      toast.error("Width, length and lane spacing must be greater than 0");
+      return;
+    }
+    const MAX_LANES = 200;
+    if (Math.floor(lengthMeters / spacing) + 1 > MAX_LANES) {
+      toast.error(`Lane spacing too small — grid would need more than ${MAX_LANES} lanes`);
+      return;
+    }
+
     const halfW = widthMeters / 2;
     const halfL = lengthMeters / 2;
-    const numLanes = Math.max(2, Math.floor(lengthMeters / spacingMeters) + 1);
+    const numLanes = Math.max(2, Math.floor(lengthMeters / spacing) + 1);
     const laneStep = lengthMeters / (numLanes - 1);
 
     const rad = (angleDeg * Math.PI) / 180;

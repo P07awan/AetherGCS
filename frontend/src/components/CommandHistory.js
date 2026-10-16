@@ -27,9 +27,13 @@ export default function CommandHistory() {
   const setHistory = useGCS((s) => s.setCommandHistory);
 
   const clear = async () => {
-    await commandsApi.clearHistory();
-    setHistory([]);
-    toast.message("Command history cleared");
+    try {
+      await commandsApi.clearHistory();
+      setHistory([]);
+      toast.message("Command history cleared");
+    } catch (e) {
+      toast.error(`Clear failed: ${e.response?.data?.detail || e.message}`);
+    }
   };
 
   return (
@@ -59,12 +63,12 @@ export default function CommandHistory() {
             className="grid grid-cols-[90px_1fr_100px_60px_70px] gap-2 px-3 py-1 border-b border-zinc-800 hover:bg-zinc-900 items-center text-zinc-200"
           >
             <span className="text-zinc-400">
-              {new Date(c.ts).toLocaleTimeString(undefined, { hour12: false })}
+              {c.ts ? new Date(c.ts).toLocaleTimeString(undefined, { hour12: false }) : "--"}
             </span>
             <span className="truncate">
               <span className="text-[#FFB000]">{c.command}</span>{" "}
               <span className="text-zinc-500">→</span>{" "}
-              <span className="text-zinc-300">{c.drone_name || c.drone_id.slice(0, 6)}</span>
+              <span className="text-zinc-300">{c.drone_name || (c.drone_id ? c.drone_id.slice(0, 6) : "—")}</span>
             </span>
             <span className="text-zinc-400 truncate" title={JSON.stringify(c.params)}>
               {Object.keys(c.params || {}).length

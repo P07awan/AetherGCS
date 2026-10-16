@@ -3,7 +3,6 @@ import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Polyline, Circle, useMap, useMapEvents } from "react-leaflet";
 import { useGCS, useDroneList, useActiveDrone } from "@/store/gcsStore";
 import { Crosshair, Navigation as NavIcon, Layers, Lock, Unlock } from "lucide-react";
-import { renderToStaticMarkup } from "react-dom/server";
 
 const MAP_PROVIDERS = {
   satellite: {
@@ -35,6 +34,8 @@ const MAP_PROVIDERS = {
 // Quadcopter Drone Icon with rotors, directional heading, and situational callout tag
 const quadcopterIcon = (heading, selected, armed, name = "", alt = null) => {
   const altText = alt != null ? `${alt.toFixed(1)}m` : "";
+  const strokeColor = selected ? "#FFB000" : "#00F0FF";
+  const rotorColor = armed ? "#00FF41" : "#FF003C";
   const labelHtml = name
     ? `<div class="absolute top-9 left-1/2 -translate-x-1/2 whitespace-nowrap px-1.5 py-0.5 rounded text-[9px] font-mono font-bold shadow-lg pointer-events-none transition-all ${
         selected
@@ -50,27 +51,18 @@ const quadcopterIcon = (heading, selected, armed, name = "", alt = null) => {
     iconSize: [36, 36],
     iconAnchor: [18, 18],
     html: `<div class="relative w-9 h-9 flex items-center justify-center">
-      <div class="w-9 h-9 flex items-center justify-center transition-transform duration-75" style="transform: rotate(${heading}deg)">
-        ${renderToStaticMarkup(
-          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-            {/* Quadcopter X Frame */}
-            <line x1="6" y1="6" x2="26" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
-            <line x1="26" y1="6" x2="6" y2="26" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="2.5" />
-
-            {/* 4 Rotors */}
-            <circle cx="6" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-            <circle cx="26" cy="6" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-            <circle cx="6" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-            <circle cx="26" cy="26" r="3.5" fill={armed ? "#00FF41" : "#FF003C"} stroke="#000" strokeWidth="1" />
-
-            {/* Forward Nose Direction Arrow */}
-            <path d="M16 2 L21 14 L16 11 L11 14 Z" fill={selected ? "#FFB000" : "#00F0FF"} stroke="#000" strokeWidth="1" />
-
-            {/* Center Body Core */}
-            <circle cx="16" cy="16" r="4.5" fill="#111" stroke={selected ? "#FFB000" : "#00F0FF"} strokeWidth="1.5" />
-            <circle cx="16" cy="16" r="1.5" fill={selected ? "#FFB000" : "#00F0FF"} />
-          </svg>
-        )}
+      <div class="w-9 h-9 flex items-center justify-center transition-transform duration-75" style="transform: rotate(${heading || 0}deg)">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <line x1="6" y1="6" x2="26" y2="26" stroke="${strokeColor}" stroke-width="2.5" />
+          <line x1="26" y1="6" x2="6" y2="26" stroke="${strokeColor}" stroke-width="2.5" />
+          <circle cx="6" cy="6" r="3.5" fill="${rotorColor}" stroke="#000" stroke-width="1" />
+          <circle cx="26" cy="6" r="3.5" fill="${rotorColor}" stroke="#000" stroke-width="1" />
+          <circle cx="6" cy="26" r="3.5" fill="${rotorColor}" stroke="#000" stroke-width="1" />
+          <circle cx="26" cy="26" r="3.5" fill="${rotorColor}" stroke="#000" stroke-width="1" />
+          <path d="M16 2 L21 14 L16 11 L11 14 Z" fill="${strokeColor}" stroke="#000" stroke-width="1" />
+          <circle cx="16" cy="16" r="4.5" fill="#111" stroke="${strokeColor}" stroke-width="1.5" />
+          <circle cx="16" cy="16" r="1.5" fill="${strokeColor}" />
+        </svg>
       </div>
       ${labelHtml}
     </div>`,
@@ -130,31 +122,60 @@ const isValidCoord = (lat, lon) =>
 
 function AutoPanHandler({ activeDrone, autoPan }) {
   const map = useMap();
-  useEffect(() => {
-    if (!autoPan || !activeDrone) return;
-    const lat = activeDrone.telemetry?.latitude;
-    const lon = activeDrone.telemetry?.longitude;
-    const hLat = activeDrone.home_lat;
-    const hLon = activeDrone.home_lon;
+  const lastPanRef = useRef({ lat: null, lon: null, ts: 0 });
 
-    if (isValidCoord(lat, lon)) {
-      map.panTo([lat, lon], { animate: true, duration: 0.5 });
-    } else if (isValidCoord(hLat, hLon)) {
-      map.panTo([hLat, hLon], { animate: true, duration: 0.5 });
+  const droneId = activeDrone?.id;
+  const lat = activeDrone?.telemetry?.latitude;
+  const lon = activeDrone?.telemetry?.longitude;
+  const homeLat = activeDrone?.home_lat;
+  const homeLon = activeDrone?.home_lon;
+
+  useEffect(() => {
+    if (!autoPan || !droneId) return;
+    const hasGps = isValidCoord(lat, lon);
+    const targetLat = hasGps ? lat : homeLat;
+    const targetLon = hasGps ? lon : homeLon;
+
+    if (!isValidCoord(targetLat, targetLon)) return;
+
+    const now = Date.now();
+    const prev = lastPanRef.current;
+
+    // For stationary / bench testing (no GPS lock):
+    // Pan only ONCE when drone or home changes, never continuously in a loop!
+    if (!hasGps) {
+      if (prev.lat === targetLat && prev.lon === targetLon) return;
+      lastPanRef.current = { lat: targetLat, lon: targetLon, ts: now };
+      map.panTo([targetLat, targetLon], { animate: false });
+      return;
     }
+
+    // For real flying: only pan if drone moved > 5 meters AND at least 1.5 seconds have elapsed
+    if (prev.lat != null && prev.lon != null) {
+      const dLat = Math.abs(targetLat - prev.lat) * 111139;
+      const dLon = Math.abs(targetLon - prev.lon) * 111139 * Math.cos((targetLat * Math.PI) / 180);
+      const dist = Math.hypot(dLat, dLon);
+      if (dist < 5.0 || now - prev.ts < 1500) return;
+    }
+
+    lastPanRef.current = { lat: targetLat, lon: targetLon, ts: now };
+    map.panTo([targetLat, targetLon], { animate: true, duration: 0.4 });
   }, [
-    activeDrone?.telemetry?.latitude,
-    activeDrone?.telemetry?.longitude,
-    activeDrone?.home_lat,
-    activeDrone?.home_lon,
+    droneId,
+    lat,
+    lon,
+    homeLat,
+    homeLon,
     autoPan,
     map,
-    activeDrone,
   ]);
   return null;
 }
 
 function UserInteractionHandler({ onUserDrag }) {
+  // Only a drag disables auto-pan. `zoomstart` also fires for programmatic
+  // flyTo/fitBounds (startup fly-to-user, "Center", "Fit All"), which used to
+  // switch auto-pan off silently; zooming doesn't conflict with panTo anyway.
   useMapEvents({
     dragstart() {
       onUserDrag && onUserDrag();
@@ -174,8 +195,6 @@ function MapResizeInvalidator() {
   }, [map]);
   return null;
 }
-
-import MissionPlannerHUD from "@/components/MissionPlannerHUD";
 
 export default function DroneMap() {
   const drones = useDroneList();
@@ -274,9 +293,12 @@ export default function DroneMap() {
   // Calculate Mission Planner Target Heading Line (Red Line)
   const targetHeadingLine = useMemo(() => {
     if (!activeDrone) return null;
-    const lat = activeDrone.telemetry.latitude;
-    const lon = activeDrone.telemetry.longitude;
-    const hdgRad = (activeDrone.telemetry.heading * Math.PI) / 180;
+    const hasGps = isValidCoord(activeDrone.telemetry?.latitude, activeDrone.telemetry?.longitude);
+    const lat = hasGps ? activeDrone.telemetry?.latitude : activeDrone.home_lat;
+    const lon = hasGps ? activeDrone.telemetry?.longitude : activeDrone.home_lon;
+    if (!isValidCoord(lat, lon)) return null;
+    const heading = activeDrone.telemetry?.heading ?? 0;
+    const hdgRad = (heading * Math.PI) / 180;
 
     // Project 150 meters ahead
     const distMeters = 150;
@@ -330,8 +352,8 @@ export default function DroneMap() {
         <AutoPanHandler activeDrone={activeDrone} autoPan={autoPan} />
         <MapResizeInvalidator />
 
-        {/* Home positions */}
-        {drones.map((d) => (
+        {/* Home positions — only render when home coords are valid */}
+        {drones.filter((d) => isValidCoord(d.home_lat, d.home_lon)).map((d) => (
           <React.Fragment key={`home-group-${d.id}`}>
             <Circle
               center={[d.home_lat, d.home_lon]}
@@ -347,17 +369,23 @@ export default function DroneMap() {
         ))}
 
         {/* GPS Track Trail (Black / Purple Line like Mission Planner) */}
-        {drones.map((d) => (
-          <Polyline
-            key={`trail-${d.id}`}
-            positions={d.trail || []}
-            pathOptions={{
-              color: d.id === activeId ? "#800080" : "#00F0FF",
-              weight: 3,
-              opacity: 0.85,
-            }}
-          />
-        ))}
+        {drones.map((d) => {
+          const validTrail = (d.trail || []).filter(
+            (p) => Array.isArray(p) && p.length === 2 && isValidCoord(p[0], p[1])
+          );
+          if (!validTrail.length) return null;
+          return (
+            <Polyline
+              key={`trail-${d.id}`}
+              positions={validTrail}
+              pathOptions={{
+                color: d.id === activeId ? "#800080" : "#00F0FF",
+                weight: 3,
+                opacity: 0.85,
+              }}
+            />
+          );
+        })}
 
         {/* Target Heading Line (Red Line) */}
         {targetHeadingLine && (
@@ -376,17 +404,23 @@ export default function DroneMap() {
         )}
 
         {/* Drone Markers */}
-        {drones.map((d) => (
-          isValidCoord(d.telemetry?.latitude, d.telemetry?.longitude) && (
+        {drones.map((d) => {
+          const hasGps = isValidCoord(d.telemetry?.latitude, d.telemetry?.longitude);
+          const hasHome = isValidCoord(d.home_lat, d.home_lon);
+          if (!hasGps && !hasHome) return null;
+          const pos = hasGps
+            ? [d.telemetry.latitude, d.telemetry.longitude]
+            : [d.home_lat, d.home_lon];
+          return (
             <Marker
               key={d.id}
-              position={[d.telemetry.latitude, d.telemetry.longitude]}
+              position={pos}
               icon={quadcopterIcon(
-                d.telemetry.heading,
+                d.telemetry?.heading ?? 0,
                 d.id === activeId || selectedIds.includes(d.id),
-                d.telemetry.armed,
-                d.name,
-                d.telemetry.altitude_relative
+                d.telemetry?.armed ?? false,
+                `${d.name}${!hasGps ? " (No GPS)" : ""}`,
+                d.telemetry?.altitude_relative ?? null
               )}
               eventHandlers={{
                 click: () => {
@@ -395,32 +429,36 @@ export default function DroneMap() {
                 },
               }}
             />
-          )
-        ))}
+          );
+        })}
 
         {/* Draft Mission Polyline */}
-        {draftWaypoints.length > 1 && (
+        {draftWaypoints.filter((w) => isValidCoord(w.latitude, w.longitude)).length > 1 && (
           <Polyline
-            positions={draftWaypoints.map((w) => [w.latitude, w.longitude])}
+            positions={draftWaypoints
+              .filter((w) => isValidCoord(w.latitude, w.longitude))
+              .map((w) => [w.latitude, w.longitude])}
             pathOptions={{ color: "#00F0FF", weight: 2.5, opacity: 0.9 }}
           />
         )}
 
         {/* Waypoint Markers */}
-        {draftWaypoints.map((wp) => (
-          <Marker
-            key={wp.seq}
-            position={[wp.latitude, wp.longitude]}
-            icon={waypointIcon(wp.seq, wp.action)}
-            draggable
-            eventHandlers={{
-              dragend: (e) => {
-                const { lat, lng } = e.target.getLatLng();
-                updateWaypoint(wp.seq, { latitude: lat, longitude: lng });
-              },
-            }}
-          />
-        ))}
+        {draftWaypoints
+          .filter((w) => isValidCoord(w.latitude, w.longitude))
+          .map((wp) => (
+            <Marker
+              key={wp.seq}
+              position={[wp.latitude, wp.longitude]}
+              icon={waypointIcon(wp.seq, wp.action)}
+              draggable
+              eventHandlers={{
+                dragend: (e) => {
+                  const { lat, lng } = e.target.getLatLng();
+                  updateWaypoint(wp.seq, { latitude: lat, longitude: lng });
+                },
+              }}
+            />
+          ))}
 
         {/* User GPS marker */}
         {userLocation && (
@@ -483,7 +521,7 @@ export default function DroneMap() {
       <div className="absolute bottom-0 left-0 right-0 z-[500] bg-black/90 border-t border-zinc-700 px-3 py-1.5 flex flex-wrap items-center justify-between font-mono text-[10px] text-zinc-300 backdrop-blur-xs">
         <div className="flex items-center gap-4">
           <span className="text-[#00FF41]">
-            GEO: <span className="text-white font-bold">{activeDrone ? `${activeDrone.telemetry.latitude.toFixed(7)} ${activeDrone.telemetry.longitude.toFixed(7)} ${(activeDrone.telemetry.altitude_relative ?? 0).toFixed(2)}m` : "-- -- --"}</span>
+            GEO: <span className="text-white font-bold">{activeDrone?.telemetry ? `${(activeDrone.telemetry.latitude ?? 0).toFixed(7)} ${(activeDrone.telemetry.longitude ?? 0).toFixed(7)} ${(activeDrone.telemetry.altitude_relative ?? 0).toFixed(2)}m` : "-- -- --"}</span>
           </span>
           <span>hdop: <span className="text-white font-bold">{activeDrone?.telemetry?.hdop != null ? activeDrone.telemetry.hdop.toFixed(1) : "--"}</span></span>
           <span>Sats: <span className="text-white font-bold">{activeDrone?.telemetry?.satellites != null ? activeDrone.telemetry.satellites : "--"}</span></span>

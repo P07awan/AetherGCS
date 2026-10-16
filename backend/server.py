@@ -76,12 +76,13 @@ class Broadcaster:
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
-        self.clients.add(ws)
-        # send full snapshot on connect
+        # Send full snapshot on connect BEFORE adding to clients to ensure
+        # the client always receives snapshot as the initial frame without race conditions.
         await ws.send_json({
             "event": "snapshot",
             "data": [d.model_dump() for d in drone_manager.list_drones()],
         })
+        self.clients.add(ws)
 
     def disconnect(self, ws: WebSocket) -> None:
         self.clients.discard(ws)
@@ -102,8 +103,36 @@ class Broadcaster:
 broadcaster = Broadcaster()
 
 
-def _on_drone_update(drone: Drone) -> None:
+_last_broadcast: dict[str, float] = {}
+_pending_flush: set[str] = set()
+_BROADCAST_INTERVAL = 0.1  # max 10 Hz per drone to ensure silky-smooth 60 FPS UI performance
+
+
+def _broadcast_drone(drone_id: str) -> None:
+    _pending_flush.discard(drone_id)
+    drone = drone_manager.get_drone(drone_id)
+    if drone is None:  # removed meanwhile — don't resurrect it on clients
+        _last_broadcast.pop(drone_id, None)
+        return
+    _last_broadcast[drone_id] = time.monotonic()
     broadcaster.push("drone", drone.model_dump())
+
+
+def _on_drone_update(drone: Drone) -> None:
+    if drone.id in _pending_flush:
+        return  # a trailing broadcast is already scheduled and will send the latest state
+    elapsed = time.monotonic() - _last_broadcast.get(drone.id, 0.0)
+    if elapsed >= _BROADCAST_INTERVAL:
+        _broadcast_drone(drone.id)
+        return
+    # Throttled: schedule a trailing send so the final state (e.g. a
+    # status change right after telemetry) is never silently dropped.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _pending_flush.add(drone.id)
+    loop.call_later(_BROADCAST_INTERVAL - elapsed, _broadcast_drone, drone.id)
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +241,14 @@ async def send_command(req: CommandRequest):
         err_detail = str(e)
 
     elapsed = int((time.time() - start) * 1000)
+
+    # Joystick velocity setpoints stream at ~20 Hz; logging them would flood
+    # the command history and push every real command out within seconds.
+    if req.command.lower() == "velocity":
+        if err_detail:
+            raise HTTPException(400, detail=err_detail)
+        return {"ok": True, "count": len(results), "results": results}
+
     results_map = {r["drone_id"]: r for r in results}
 
     logs: list[CommandLog] = []
@@ -303,21 +340,23 @@ async def duplicate_mission(mid: str):
 # ---------------------------------------------------------------------------
 @api.websocket("/ws/telemetry")
 async def ws_telemetry(ws: WebSocket):
-    await broadcaster.connect(ws)
+    logger.info("Incoming WebSocket telemetry connection")
     try:
+        await broadcaster.connect(ws)
+        logger.info("WebSocket telemetry connected and snapshot sent")
         while True:
             # keep-alive; client may send ping
             msg = await ws.receive_text()
             if msg == "ping":
                 await ws.send_json({"event": "pong", "data": time.time()})
     except WebSocketDisconnect:
+        logger.info("WebSocket telemetry client disconnected")
+    except Exception as e:
+        logger.warning("WebSocket telemetry error: %s", e)
+    finally:
         broadcaster.disconnect(ws)
-    except Exception:
-        broadcaster.disconnect(ws)
 
 
-
-app.include_router(api)
 
 _raw_cors = os.environ.get("CORS_ORIGINS", "*")
 _cors_origins = [o.strip() for o in _raw_cors.split(",") if o.strip()]
@@ -335,3 +374,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@api.get("/health")
+@app.get("/health")
+async def health_check():
+    """Health endpoint (available at /health and /api/health) for service verification."""
+    return {"status": "ok", "service": "gcs", "drones": len(drone_manager.list_drones())}
+
+
+app.include_router(api)

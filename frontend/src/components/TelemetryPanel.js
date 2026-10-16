@@ -1,3 +1,4 @@
+import React, { forwardRef } from "react";
 import { useGCS, useActiveDrone } from "@/store/gcsStore";
 import { fmt, fmtLat, fmtLon, fmtDuration, statusDot } from "@/utils/format";
 import { Progress } from "@/components/ui/progress";
@@ -27,8 +28,6 @@ const Section = ({ title, icon: Icon, children }) => (
     <div className="px-3 py-1.5">{children}</div>
   </div>
 );
-
-import React, { forwardRef } from "react";
 
 const TelemetryPanel = forwardRef(({ style, className = "" }, ref) => {
   const d = useActiveDrone();
@@ -126,7 +125,11 @@ const TelemetryPanel = forwardRef(({ style, className = "" }, ref) => {
           <Row label="Longitude" value={fmtLon(t.longitude)} testid="tlm-lon" />
           <Row label="Altitude (MSL)" value={fmt(t.altitude_msl, 1)} unit="m" testid="tlm-alt-msl" />
           <Row label="Altitude (rel)" value={fmt(t.altitude_relative, 1)} unit="m" testid="tlm-alt-rel" />
-          <Row label="Home Ref" value={`${d.home_lat.toFixed(4)}, ${d.home_lon.toFixed(4)}`} accent="text-zinc-400" />
+          <Row
+            label="Home Ref"
+            value={d.home_lat != null && d.home_lon != null ? `${d.home_lat.toFixed(4)}, ${d.home_lon.toFixed(4)}` : "--, --"}
+            accent="text-zinc-400"
+          />
         </Section>
 
         <Section title="ATTITUDE & MOTION" icon={Gauge}>

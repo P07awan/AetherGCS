@@ -61,7 +61,10 @@ class DroneCreate(BaseModel):
 
 class Telemetry(BaseModel):
     armed: bool = False
-    flight_mode: FlightMode = "STABILIZE"
+    # Plain str (not FlightMode): autopilots report modes outside that list
+    # (e.g. SMART_RTL, MODE_21) and a Literal here makes saved drones fail
+    # validation when reloaded from MongoDB.
+    flight_mode: str = "STABILIZE"
     flight_state: FlightState = "DISCONNECTED"  # explicit state machine
     # Optional for real drones — None means MAVLink hasn't sent data yet
     battery_percent: Optional[float] = None   # 0-100 or None (unknown)

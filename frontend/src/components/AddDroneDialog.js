@@ -313,20 +313,34 @@ export default function AddDroneDialog({ open, onOpenChange }) {
     }
     setFieldErrors({});
     setBusy(true);
+    let drone;
     try {
-      const drone = await dronesApi.create({
+      drone = await dronesApi.create({
         name, system_id: Number(sysId), component_id: 1,
         connection: buildConnection(),
         home_lat: Number(homeLat), home_lon: Number(homeLon), home_alt: 0,
       });
-      await dronesApi.connect(drone.id);
-      toast.success(`${drone.name} added & connected successfully!`);
-      onOpenChange(false);
     } catch (e) {
       const errDetail = e.response?.data?.detail || e.message;
-      toast.error(`Connection Failed: ${errDetail}`, { duration: 7000 });
+      toast.error(`Add drone failed: ${errDetail}`, { duration: 7000 });
+      setBusy(false);
+      return;
+    }
+    // The drone now exists on the backend. If only the connect fails, close
+    // the dialog anyway — retrying "Add" would hit the duplicate system-ID /
+    // endpoint checks. The drone stays in the list and can be reconnected.
+    try {
+      await dronesApi.connect(drone.id);
+      toast.success(`${drone.name} added & connected successfully!`);
+    } catch (e) {
+      const errDetail = e.response?.data?.detail || e.message;
+      toast.warning(
+        `${drone.name} was added but could not connect: ${errDetail}. Use Connect to retry.`,
+        { duration: 9000 }
+      );
     } finally {
       setBusy(false);
+      onOpenChange(false);
     }
   };
 

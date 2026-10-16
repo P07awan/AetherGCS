@@ -1,4 +1,4 @@
-import { API } from "@/services/api";
+import { API } from "./api";
 
 /**
  * Real-time telemetry WebSocket handler with auto-reconnect.
@@ -21,6 +21,8 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
   let closed = false;
   let reconnectDelay = 1000;
   let heartbeatInterval = null;
+  let reconnectTimer = null;
+  let rafId = null;
 
   const connect = () => {
     if (closed) return;
@@ -33,22 +35,52 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
     onStatus && onStatus("connecting");
 
     ws.onopen = () => {
+      if (closed) {
+        try { ws.close(); } catch {}
+        return;
+      }
       reconnectDelay = 1000;
       onStatus && onStatus("open");
       heartbeatInterval = setInterval(() => {
         try {
-          ws?.send("ping");
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send("ping");
+          }
         } catch {}
       }, 15000);
     };
 
+    let pendingDroneMap = {};
+    let rafScheduled = false;
+
+    const flushDrones = () => {
+      rafScheduled = false;
+      rafId = null;
+      if (closed) return;
+      const dronesToUpdate = Object.values(pendingDroneMap);
+      pendingDroneMap = {};
+      dronesToUpdate.forEach((d) => onDrone && onDrone(d));
+    };
+
     ws.onmessage = (ev) => {
+      if (closed) return;
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       switch (msg.event) {
         case "snapshot": onSnapshot && onSnapshot(msg.data); break;
-        case "drone": onDrone && onDrone(msg.data); break;
-        case "drone_removed": onDroneRemoved && onDroneRemoved(msg.data); break;
+        case "drone":
+          if (msg.data && msg.data.id) {
+            pendingDroneMap[msg.data.id] = msg.data;
+            if (!rafScheduled) {
+              rafScheduled = true;
+              rafId = requestAnimationFrame(flushDrones);
+            }
+          }
+          break;
+        case "drone_removed":
+          if (msg.data && msg.data.id) delete pendingDroneMap[msg.data.id];
+          onDroneRemoved && onDroneRemoved(msg.data);
+          break;
         case "command": onCommand && onCommand(msg.data); break;
         default: break;
       }
@@ -57,16 +89,19 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
     ws.onerror = () => { /* handled by onclose */ };
 
     ws.onclose = () => {
-      onStatus && onStatus("closed");
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       heartbeatInterval = null;
-      scheduleReconnect();
+      if (!closed) {
+        onStatus && onStatus("closed");
+        scheduleReconnect();
+      }
     };
   };
 
   const scheduleReconnect = () => {
     if (closed) return;
-    setTimeout(connect, reconnectDelay);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
   };
 
@@ -75,7 +110,18 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
   return {
     close: () => {
       closed = true;
-      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       try { ws?.close(); } catch {}
     },
   };

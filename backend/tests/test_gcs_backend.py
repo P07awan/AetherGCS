@@ -13,6 +13,27 @@ API = f"{BASE_URL}/api"
 WS_URL = API.replace("http", "ws") + "/ws/telemetry"
 
 
+
+_worker_prefix = f"TEST_{os.getpid()}_"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_test_drones(session):
+    """Remove leftover drones for this test worker process before and after this module."""
+    def _purge():
+        try:
+            drones = session.get(f"{API}/drones", timeout=10).json()
+            for d in drones:
+                if d.get("name", "").startswith(_worker_prefix):
+                    session.delete(f"{API}/drones/{d['id']}", timeout=10)
+        except Exception:
+            pass
+
+    _purge()  # pre-clean
+    yield
+    _purge()  # post-clean
+
+
 @pytest.fixture(scope="module")
 def session():
     s = requests.Session()
@@ -25,11 +46,12 @@ import itertools
 _sysid_counter = itertools.count(10 + (os.getpid() % 15) * 10)
 
 
-def _create_drone(session, name="TEST_Alpha", system_id=None):
+def _create_drone(session, name="Alpha", system_id=None):
     if system_id is None:
         system_id = next(_sysid_counter)
+    drone_name = name if name.startswith(_worker_prefix) else f"{_worker_prefix}{name}"
     payload = {
-        "name": name,
+        "name": drone_name,
         "system_id": system_id,
         "component_id": 1,
         "connection": {"connection_type": "simulator", "address": "sim://local", "port": 0},
@@ -50,15 +72,20 @@ class TestDrones:
         assert isinstance(r.json(), list)
 
     def test_create_drone(self, session):
-        d = _create_drone(session, "TEST_Create")
+        d = _create_drone(session, "Create")
         assert "id" in d and len(d["id"]) > 10
-        assert d["name"] == "TEST_Create"
+        assert d["name"] == f"{_worker_prefix}Create"
         assert d["status"] == "disconnected"
         assert d["home_lat"] == 37.7749
         assert d["telemetry"]["armed"] is False
-        # verify via GET
-        r = session.get(f"{API}/drones/{d['id']}", timeout=10)
-        assert r.status_code == 200
+        # verify via GET — retry once to handle uvicorn --reload mid-test
+        drone_id = d["id"]
+        for attempt in range(3):
+            r = session.get(f"{API}/drones/{drone_id}", timeout=10)
+            if r.status_code == 200:
+                break
+            time.sleep(1.0)
+        assert r.status_code == 200, f"GET /drones/{drone_id} returned {r.status_code} after retries (server may have reloaded)"
         assert r.json()["id"] == d["id"]
         session.delete(f"{API}/drones/{d['id']}", timeout=10)
 

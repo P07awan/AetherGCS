@@ -1,10 +1,9 @@
+import React, { forwardRef } from "react";
 import { useGCS, useDroneList } from "@/store/gcsStore";
 import { statusDot } from "@/utils/format";
 import { Plane, Battery, Wifi, WifiOff, SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MissionPlannerHUD from "@/components/MissionPlannerHUD";
-
-import React, { forwardRef } from "react";
 
 const DroneListSidebar = forwardRef(({ style, className = "" }, ref) => {
   const drones = useDroneList();

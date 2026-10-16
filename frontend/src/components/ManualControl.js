@@ -33,36 +33,51 @@ export default function ManualControl() {
     up: 0,
     yaw_rate: 0,
   });
+  const pressedKeys = useRef(new Set());
+
+  // Latest limits/targets, read by the send loop so it never uses stale values.
+  const settingsRef = useRef({});
+  settingsRef.current = { maxSpeed, maxZSpeed, maxYaw, targetIds: getTargetIds() };
 
   const sendIntervalRef = useRef(null);
+  // At most one velocity request in flight, so a slow non-zero setpoint can
+  // never land after the zero sent by stopDrone.
+  const inFlightRef = useRef(null);
+  // Drones that have received a non-zero setpoint and still need a zero.
+  const movingIdsRef = useRef([]);
+
+  const sendVelocity = useCallback((ids, vel) => {
+    const p = commandsApi.send(ids, "velocity", vel).finally(() => {
+      if (inFlightRef.current === p) inFlightRef.current = null;
+    });
+    inFlightRef.current = p;
+    return p;
+  }, []);
 
   const startLoop = useCallback(() => {
-    if (!sendIntervalRef.current) {
-      sendIntervalRef.current = setInterval(async () => {
-        const { forward, right, up, yaw_rate } = sticks.current;
-        setCurrentVels({
-          forward: Number((forward * maxSpeed).toFixed(1)),
-          right: Number((right * maxSpeed).toFixed(1)),
-          up: Number((up * maxZSpeed).toFixed(1)),
-          yaw_rate: Number((yaw_rate * maxYaw).toFixed(1)),
-        });
+    if (sendIntervalRef.current) return;
+    sendIntervalRef.current = setInterval(() => {
+      const { forward, right, up, yaw_rate } = sticks.current;
+      const { maxSpeed: ms, maxZSpeed: mz, maxYaw: my, targetIds } = settingsRef.current;
+      setCurrentVels({
+        forward: Number((forward * ms).toFixed(1)),
+        right: Number((right * ms).toFixed(1)),
+        up: Number((up * mz).toFixed(1)),
+        yaw_rate: Number((yaw_rate * my).toFixed(1)),
+      });
 
-        const ids = getTargetIds();
-        if (ids.length === 0) return;
-
-        try {
-          await commandsApi.send(ids, "velocity", {
-            forward: forward * maxSpeed,
-            right: right * maxSpeed,
-            up: up * maxZSpeed,
-            yaw_rate: yaw_rate * maxYaw,
-          });
-        } catch (e) {
-          // silently fail continuous velocity packets
-        }
-      }, 50); // 20Hz
-    }
-  }, [getTargetIds, maxSpeed, maxZSpeed, maxYaw]);
+      if (targetIds.length === 0 || inFlightRef.current) return;
+      movingIdsRef.current = Array.from(new Set([...movingIdsRef.current, ...targetIds]));
+      sendVelocity(targetIds, {
+        forward: forward * ms,
+        right: right * ms,
+        up: up * mz,
+        yaw_rate: yaw_rate * my,
+      }).catch(() => {
+        // silently fail continuous velocity packets
+      });
+    }, 50); // 20Hz
+  }, [sendVelocity]);
 
   const stopLoop = useCallback(() => {
     if (sendIntervalRef.current) {
@@ -74,14 +89,19 @@ export default function ManualControl() {
   const stopDrone = useCallback(async () => {
     sticks.current = { forward: 0, right: 0, up: 0, yaw_rate: 0 };
     setCurrentVels({ forward: 0, right: 0, up: 0, yaw_rate: 0 });
-    const ids = getTargetIds();
+    const ids = Array.from(new Set([...movingIdsRef.current, ...settingsRef.current.targetIds]));
+    movingIdsRef.current = [];
     if (ids.length === 0) return;
+    // Let any pending setpoint finish first so the zero is processed last.
+    if (inFlightRef.current) {
+      try { await inFlightRef.current; } catch {}
+    }
     try {
-      await commandsApi.send(ids, "velocity", { forward: 0, right: 0, up: 0, yaw_rate: 0 });
+      await sendVelocity(ids, { forward: 0, right: 0, up: 0, yaw_rate: 0 });
     } catch (e) {
       toast.error("Failed to stop drone");
     }
-  }, [getTargetIds]);
+  }, [sendVelocity]);
 
   const checkLoopState = useCallback(() => {
     const { forward, right, up, yaw_rate } = sticks.current;
@@ -94,6 +114,39 @@ export default function ManualControl() {
       stopDrone();
     }
   }, [startLoop, stopLoop, stopDrone]);
+
+  const releaseAll = useCallback(() => {
+    pressedKeys.current.clear();
+    const { forward, right, up, yaw_rate } = sticks.current;
+    const moving = forward !== 0 || right !== 0 || up !== 0 || yaw_rate !== 0;
+    stopLoop();
+    if (moving || movingIdsRef.current.length > 0) stopDrone();
+  }, [stopLoop, stopDrone]);
+
+  // Changing the target set mid-flight: stop the drones we were flying.
+  const targetKey = getTargetIds().join(",");
+  const prevTargetKey = useRef(targetKey);
+  useEffect(() => {
+    if (prevTargetKey.current !== targetKey) {
+      prevTargetKey.current = targetKey;
+      if (movingIdsRef.current.length > 0) releaseAll();
+    }
+  }, [targetKey, releaseAll]);
+
+  // Losing focus means keyup events will never arrive — stop instead of
+  // flying on with a "stuck" key. Also stop when this panel unmounts.
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") releaseAll();
+    };
+    window.addEventListener("blur", releaseAll);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("blur", releaseAll);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, [releaseAll]);
+  useEffect(() => () => releaseAll(), [releaseAll]);
 
   const onLeftStick = (x, y) => {
     sticks.current.yaw_rate = x;
@@ -115,7 +168,7 @@ export default function ManualControl() {
   useEffect(() => {
     if (!keyboardEnabled) return;
 
-    const pressed = new Set();
+    const pressed = pressedKeys.current;
 
     const handleKeyDown = (e) => {
       // Don't intercept if user is typing in an input or textarea
@@ -166,9 +219,8 @@ export default function ManualControl() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
-      stopLoop();
     };
-  }, [keyboardEnabled, checkLoopState, stopLoop]);
+  }, [keyboardEnabled, checkLoopState]);
 
   return (
     <div className="flex flex-col h-full bg-zinc-950 p-3 relative text-zinc-300 overflow-y-auto">
