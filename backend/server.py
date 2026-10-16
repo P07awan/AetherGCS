@@ -50,29 +50,37 @@ command_log = CommandLogStore()
 # WebSocket broadcaster
 # ---------------------------------------------------------------------------
 class Broadcaster:
+    """Fan-out to WebSocket clients, one bounded queue + sender task per client.
+
+    A single shared send loop let one client that stopped reading (e.g. a
+    browser tab put to sleep in the background) block on TCP backpressure and
+    freeze telemetry for every other client. Now a client that falls more than
+    CLIENT_QUEUE messages behind is disconnected; its page reconnects and gets
+    a fresh snapshot.
+    """
+
+    CLIENT_QUEUE = 300  # ~5 s of updates for a handful of drones
+
     def __init__(self) -> None:
-        self.clients: set[WebSocket] = set()
-        self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=1000)
-        self._task: asyncio.Task | None = None
+        self.clients: dict[WebSocket, asyncio.Queue] = {}
+        self._senders: dict[WebSocket, asyncio.Task] = {}
 
     async def start(self) -> None:
-        if self._task is None:
-            self._task = asyncio.create_task(self._run(), name="ws-broadcaster")
+        pass  # senders are created per client in connect()
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._task = None
+        for ws in list(self.clients):
+            self.disconnect(ws)
 
     def push(self, event: str, payload) -> None:
-        try:
-            self._queue.put_nowait({"event": event, "data": payload})
-        except asyncio.QueueFull:
-            pass
+        msg = {"event": event, "data": payload}
+        for ws, q in list(self.clients.items()):
+            try:
+                q.put_nowait(msg)
+            except asyncio.QueueFull:
+                logger.warning("WebSocket client too slow (%d queued) — disconnecting it", q.qsize())
+                self.disconnect(ws)
+                asyncio.ensure_future(self._close(ws))
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -82,30 +90,51 @@ class Broadcaster:
             "event": "snapshot",
             "data": [d.model_dump() for d in drone_manager.list_drones()],
         })
-        self.clients.add(ws)
+        q: asyncio.Queue = asyncio.Queue(maxsize=self.CLIENT_QUEUE)
+        self.clients[ws] = q
+        self._senders[ws] = asyncio.create_task(self._sender(ws, q), name="ws-sender")
 
     def disconnect(self, ws: WebSocket) -> None:
-        self.clients.discard(ws)
+        self.clients.pop(ws, None)
+        task = self._senders.pop(ws, None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
 
-    async def _run(self) -> None:
-        while True:
-            msg = await self._queue.get()
-            dead = []
-            for ws in list(self.clients):
-                try:
-                    await ws.send_json(msg)
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                self.disconnect(ws)
+    async def _sender(self, ws: WebSocket, q: asyncio.Queue) -> None:
+        try:
+            while True:
+                await ws.send_json(await q.get())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        finally:
+            self.disconnect(ws)
+
+    @staticmethod
+    async def _close(ws: WebSocket) -> None:
+        try:
+            await asyncio.wait_for(ws.close(code=1013), timeout=2)  # 1013 = try again later
+        except Exception:
+            pass
 
 
 broadcaster = Broadcaster()
+
+_background: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    """Fire-and-forget with a strong reference so the task isn't GC'd mid-run."""
+    task = asyncio.create_task(coro)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
 
 
 _last_broadcast: dict[str, float] = {}
 _pending_flush: set[str] = set()
 _BROADCAST_INTERVAL = 0.1  # max 10 Hz per drone to ensure silky-smooth 60 FPS UI performance
+_TRAIL_TAIL = 20
 
 
 def _broadcast_drone(drone_id: str) -> None:
@@ -115,7 +144,12 @@ def _broadcast_drone(drone_id: str) -> None:
         _last_broadcast.pop(drone_id, None)
         return
     _last_broadcast[drone_id] = time.monotonic()
-    broadcaster.push("drone", drone.model_dump())
+    # The full trail (up to 500 points) is in the snapshot; resending it at
+    # 10 Hz per drone cost ~0.8 MB/s per client with six drones. Send only the
+    # newest points — the client appends them to the trail it already has.
+    payload = drone.model_dump(exclude={"trail"})
+    payload["trail_tail"] = drone.trail[-_TRAIL_TAIL:]
+    broadcaster.push("drone", payload)
 
 
 def _on_drone_update(drone: Drone) -> None:
@@ -269,9 +303,11 @@ async def send_command(req: CommandRequest):
             response_ms=elapsed,
         ))
 
+    # Broadcast now; persist in the background with one bulk insert. Awaiting
+    # a DB write per drone delayed every swarm response by N round trips.
     for lg in logs:
-        await command_log.add(lg)
         broadcaster.push("command", lg.model_dump())
+    _spawn(command_log.add_many(logs))
 
     if err_detail:
         raise HTTPException(400, detail=err_detail)

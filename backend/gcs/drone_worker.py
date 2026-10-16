@@ -653,6 +653,7 @@ class MavlinkWorker(DroneWorker):
     HEARTBEAT_INTERVAL = 1.0       # send GCS heartbeat every second
     CONNECT_TIMEOUT    = 15.0      # seconds to wait for first heartbeat
     RECONNECT_DELAY    = 5.0       # seconds before reconnect attempt
+    LINK_TIMEOUT       = 3.0       # no autopilot heartbeat for this long = link lost
     TELEMETRY_STREAM_RATE = 10     # Hz — requested from autopilot
 
     def __init__(self, drone: Drone, on_update: Callable[[Drone], None]) -> None:
@@ -663,14 +664,21 @@ class MavlinkWorker(DroneWorker):
         self._mission_buffer: list[Waypoint] = []
         self._pending_mission_ack = False
         self._mission_msg_queue: asyncio.Queue = asyncio.Queue()
-        # ACK queue: COMMAND_ACK messages routed here for command confirmation
-        self._ack_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+        # COMMAND_ACK routing: command id -> futures of commands awaiting it.
+        # A single shared queue let concurrent commands on one drone discard
+        # each other's ACKs (both then timed out).
+        self._ack_waiters: dict[int, list[asyncio.Future]] = {}
+        # MAVLink mission protocol is a stateful exchange: one at a time per drone.
+        self._mission_lock = asyncio.Lock()
         # Last STATUSTEXT lines (ring buffer) — captures pre-arm check failures
         self._recent_statustext: list[str] = []
         # In-flight connect() link attempt, owned here so disconnect()/remove
         # can cancel it even though connect() runs in the caller's task.
         self._connect_task: Optional[asyncio.Task] = None
         self._disconnect_requested = False
+        # Heartbeat watchdog (see _heartbeat_loop)
+        self._last_hb_rx = 0.0
+        self._link_lost = False
         # Clean any historical dummy coordinates or Null Island points from trail
         self.drone.trail = [
             p for p in (self.drone.trail or [])
@@ -771,6 +779,8 @@ class MavlinkWorker(DroneWorker):
             raise RuntimeError("Connection attempt cancelled: drone was disconnected or removed")
 
         self._running = True
+        self._last_hb_rx = time.monotonic()
+        self._link_lost = False
         self.drone.status = "connected"
         self.drone.last_error = None
         self.on_update(self.drone)
@@ -945,7 +955,6 @@ class MavlinkWorker(DroneWorker):
                 f"MAVLink telemetry to port {self.drone.connection.port or '(configured port)'}."
             )
 
-        self._mav = mav
         # Lock target_system to this drone's hardware system_id
         src_sys = hb.get_srcSystem()
         self._hardware_sysid = src_sys
@@ -953,6 +962,22 @@ class MavlinkWorker(DroneWorker):
             # Discovery: update drone model with the discovered sysid
             self.drone.system_id = src_sys
         mav.target_system = src_sys
+        mav.target_component = hb.get_srcComponent()
+        # pymavlink's mode_mapping()/set_mode() read the state of the vehicle it
+        # locked onto first; make that this drone's autopilot.
+        mav.sysid = src_sys
+
+        # Commands, heartbeats and setpoints are sent from several threads at
+        # once; serialise whole packets so serial writes can't interleave bytes
+        # and sequence numbers stay consistent.
+        send_lock = threading.Lock()
+        raw_send = mav.mav.send
+
+        def _locked_send(mavmsg, *a, **kw):
+            with send_lock:
+                return raw_send(mavmsg, *a, **kw)
+        mav.mav.send = _locked_send
+        self._mav = mav
 
         # populate firmware / autopilot info from heartbeat
         autopilot = getattr(hb, "autopilot", 3)
@@ -1027,6 +1052,9 @@ class MavlinkWorker(DroneWorker):
             except Exception as exc:
                 if self._running:
                     logger.warning("MavlinkWorker %s receive error: %s", self.drone.id, exc)
+                    self.drone.telemetry.heartbeat = False
+                    self.drone.last_error = f"Link lost ({exc}); reconnecting…"
+                    self.on_update(self.drone)
                     await asyncio.sleep(0.5)
                     if self.drone.connection.auto_reconnect:
                         self._running = False
@@ -1087,6 +1115,12 @@ class MavlinkWorker(DroneWorker):
             # system ID; their heartbeats carry no armed/mode state.
             if not _is_autopilot_heartbeat(msg):
                 return
+            self._last_hb_rx = time.monotonic()
+            if self._link_lost:
+                self._link_lost = False
+                self.drone.status = "connected"
+                self.drone.last_error = None
+                logger.info("[Drone %s] link regained", self.drone.name)
             t.heartbeat    = True
             t.heartbeat_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             t.armed        = bool(msg.base_mode & 0x80)  # MAV_MODE_FLAG_SAFETY_ARMED
@@ -1249,11 +1283,7 @@ class MavlinkWorker(DroneWorker):
                 pass
 
         elif typ == "COMMAND_ACK":
-            # Route to the ACK queue so waiting commands can read their result
-            try:
-                self._ack_queue.put_nowait(msg)
-            except Exception:
-                pass
+            self._dispatch_ack(msg)
 
         elif typ == "STATUSTEXT":
             text = msg.text.rstrip("\x00")
@@ -1285,7 +1315,25 @@ class MavlinkWorker(DroneWorker):
                     )
             except Exception:
                 pass
+            self._check_link()
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+
+    def _check_link(self) -> None:
+        """Flag a drone whose autopilot went silent (power loss, out of radio range).
+
+        Without this a dead link kept showing "connected" with frozen telemetry,
+        and every command to it hung until its ACK timeout.
+        """
+        if not self._running or self._link_lost:
+            return
+        silent = time.monotonic() - self._last_hb_rx
+        if silent > self.LINK_TIMEOUT:
+            self._link_lost = True
+            self.drone.telemetry.heartbeat = False
+            self.drone.status = "error"
+            self.drone.last_error = f"Link lost: no heartbeat for {silent:.0f}s"
+            logger.warning("[Drone %s] %s", self.drone.name, self.drone.last_error)
+            self.on_update(self.drone)
 
     # ---- reconnect loop ----------------------------------------------------
     async def _reconnect_loop(self) -> None:
@@ -1304,6 +1352,8 @@ class MavlinkWorker(DroneWorker):
                 await self._close_mav()
                 await self._open_link()
                 self._running = True
+                self._last_hb_rx = time.monotonic()
+                self._link_lost = False
                 self.drone.status = "connected"
                 self.drone.last_error = None
                 self.on_update(self.drone)
@@ -1338,64 +1388,70 @@ class MavlinkWorker(DroneWorker):
                 err += f" - {self.drone.last_error}"
             raise RuntimeError(err)
 
-    async def _wait_for_ack(self, command_id: int, timeout: float = 5.0) -> None:
+    def _expect_ack(self, command_id: int) -> asyncio.Future:
+        """Register interest in COMMAND_ACK for command_id. Call BEFORE sending."""
+        fut = asyncio.get_running_loop().create_future()
+        self._ack_waiters.setdefault(command_id, []).append(fut)
+        return fut
+
+    def _dispatch_ack(self, msg) -> None:
+        result = getattr(msg, "result", -1)
+        if result == 5:  # MAV_RESULT_IN_PROGRESS — the final ACK follows
+            return
+        cmd = getattr(msg, "command", None)
+        if cmd is None:  # very old firmware: no command field, give it to the oldest waiter
+            cmd = next((c for c, w in self._ack_waiters.items() if w), None)
+        for fut in self._ack_waiters.pop(cmd, []) if cmd is not None else []:
+            if not fut.done():
+                fut.set_result(msg)
+
+    async def _wait_for_ack(
+        self, command_id: int, timeout: float = 5.0, fut: Optional[asyncio.Future] = None
+    ) -> None:
         """
-        Wait for COMMAND_ACK matching command_id.
+        Wait for COMMAND_ACK matching command_id (pass the future from _expect_ack).
         Raises RuntimeError with the actual rejection reason if the FC rejects the command.
         MAV_RESULT values: 0=ACCEPTED, 1=TEMPORARILY_REJECTED, 2=DENIED, 3=UNSUPPORTED, 4=FAILED
         """
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                # Gather any recent statustext for context
-                recent = "; ".join(self._recent_statustext[-3:]) if self._recent_statustext else ""
-                hint = f" ({recent})" if recent else ""
-                raise TimeoutError(
-                    f"No COMMAND_ACK received for command {command_id} within {timeout}s{hint}"
-                )
-            try:
-                msg = await asyncio.wait_for(self._ack_queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
-                recent = "; ".join(self._recent_statustext[-3:]) if self._recent_statustext else ""
-                hint = f" ({recent})" if recent else ""
-                raise TimeoutError(
-                    f"No COMMAND_ACK received for command {command_id} within {timeout}s{hint}"
-                )
-
-            # Match the command we sent (older FW may not include command field)
-            ack_cmd = getattr(msg, "command", None)
-            if ack_cmd is not None and ack_cmd != command_id:
-                # Stale ACK from a different command — discard and keep waiting.
-                # (Do NOT put it back — that causes an infinite loop.)
-                await asyncio.sleep(0.02)
-                continue
-
-            result = getattr(msg, "result", -1)
-            if result == 0:  # MAV_RESULT_ACCEPTED
-                return
-
-            # Build rejection message with any statustext context
-            result_names = {
-                1: "TEMPORARILY_REJECTED",
-                2: "DENIED",
-                3: "UNSUPPORTED",
-                4: "FAILED",
-                5: "IN_PROGRESS",
-            }
-            result_str = result_names.get(result, f"RESULT_{result}")
-            # Find most relevant statustext (PreArm: / Arm: lines)
-            prearm_msgs = [
-                s for s in self._recent_statustext
-                if s.startswith("PreArm:") or s.startswith("Arm:")
-            ]
-            detail = prearm_msgs[-1] if prearm_msgs else (
-                self._recent_statustext[-1] if self._recent_statustext else ""
+        if fut is None:
+            fut = self._expect_ack(command_id)
+        try:
+            msg = await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            waiters = self._ack_waiters.get(command_id, [])
+            if fut in waiters:
+                waiters.remove(fut)
+            recent = "; ".join(self._recent_statustext[-3:]) if self._recent_statustext else ""
+            hint = f" ({recent})" if recent else ""
+            raise TimeoutError(
+                f"No COMMAND_ACK received for command {command_id} within {timeout}s{hint}"
             )
-            raise RuntimeError(
-                f"Command {command_id} rejected: {result_str}"
-                + (f" — {detail}" if detail else "")
-            )
+
+        result = getattr(msg, "result", -1)
+        if result == 0:  # MAV_RESULT_ACCEPTED
+            return
+
+        # Build rejection message with any statustext context
+        result_names = {
+            1: "TEMPORARILY_REJECTED",
+            2: "DENIED",
+            3: "UNSUPPORTED",
+            4: "FAILED",
+            5: "IN_PROGRESS",
+        }
+        result_str = result_names.get(result, f"RESULT_{result}")
+        # Find most relevant statustext (PreArm: / Arm: lines)
+        prearm_msgs = [
+            s for s in self._recent_statustext
+            if s.startswith("PreArm:") or s.startswith("Arm:")
+        ]
+        detail = prearm_msgs[-1] if prearm_msgs else (
+            self._recent_statustext[-1] if self._recent_statustext else ""
+        )
+        raise RuntimeError(
+            f"Command {command_id} rejected: {result_str}"
+            + (f" — {detail}" if detail else "")
+        )
 
     # ---- flight commands ---------------------------------------------------
     async def arm(self) -> None:
@@ -1405,12 +1461,8 @@ class MavlinkWorker(DroneWorker):
             logger.info("Drone %s already armed", self.drone.name)
             return
         loop = asyncio.get_running_loop()
-        # Clear stale ACKs
-        while not self._ack_queue.empty():
-            try:
-                self._ack_queue.get_nowait()
-            except Exception:
-                break
+        # Register before sending so the ACK can't arrive unobserved
+        ack = self._expect_ack(400)
         self._recent_statustext.clear()
 
         self.drone.telemetry.flight_state = "ARMING"
@@ -1427,7 +1479,7 @@ class MavlinkWorker(DroneWorker):
         logger.info("ARM command sent to %s", self.drone.name)
 
         # Wait for COMMAND_ACK — raises RuntimeError with actual reason if rejected
-        await self._wait_for_ack(400, timeout=5.0)
+        await self._wait_for_ack(400, timeout=5.0, fut=ack)
 
         # Verify heartbeat confirms armed == True (up to 3 seconds)
         for _ in range(15):
@@ -1455,12 +1507,8 @@ class MavlinkWorker(DroneWorker):
             return
 
         loop = asyncio.get_running_loop()
-        # Clear stale ACKs before sending
-        while not self._ack_queue.empty():
-            try:
-                self._ack_queue.get_nowait()
-            except Exception:
-                break
+        # Register before sending so the ACK can't arrive unobserved
+        ack = self._expect_ack(400)
 
         await loop.run_in_executor(
             None,
@@ -1470,7 +1518,7 @@ class MavlinkWorker(DroneWorker):
 
         # Wait for ACK — handle DENIED gracefully (may already be disarmed)
         try:
-            await self._wait_for_ack(400, timeout=5.0)
+            await self._wait_for_ack(400, timeout=5.0, fut=ack)
         except RuntimeError as exc:
             # If FC says DENIED/TEMPORARILY_REJECTED but drone is already disarmed
             # (e.g. FC auto-disarmed after landing), treat as success
@@ -1517,12 +1565,8 @@ class MavlinkWorker(DroneWorker):
 
         loop = asyncio.get_running_loop()
 
-        # Clear stale ACKs
-        while not self._ack_queue.empty():
-            try:
-                self._ack_queue.get_nowait()
-            except Exception:
-                break
+        # Register before sending so the ACK can't arrive unobserved
+        ack = self._expect_ack(22)
 
         # Switch to GUIDED mode (required for MAV_CMD_NAV_TAKEOFF on ArduCopter)
         await loop.run_in_executor(None, lambda: self._set_mode("GUIDED"))
@@ -1559,7 +1603,7 @@ class MavlinkWorker(DroneWorker):
         logger.info("MAV_CMD_NAV_TAKEOFF sent to %s (target: %.1fm)", self.drone.name, altitude)
 
         # Wait for COMMAND_ACK
-        await self._wait_for_ack(22, timeout=5.0)
+        await self._wait_for_ack(22, timeout=5.0, fut=ack)
 
         self.drone.telemetry.flight_state = "TAKING_OFF"
         self.on_update(self.drone)
@@ -1633,12 +1677,8 @@ class MavlinkWorker(DroneWorker):
             raise RuntimeError(
                 "Cannot level horizon while armed. LAND and DISARM the drone first."
             )
-        # Clear stale ACKs so we read the result of THIS calibration
-        while not self._ack_queue.empty():
-            try:
-                self._ack_queue.get_nowait()
-            except Exception:
-                break
+        # Register before sending so the ACK can't arrive unobserved
+        ack = self._expect_ack(241)
         self._recent_statustext.clear()
         await asyncio.get_running_loop().run_in_executor(
             None,
@@ -1650,7 +1690,7 @@ class MavlinkWorker(DroneWorker):
         logger.info("LEVEL HORIZON sent to %s", self.drone.name)
         # Board-level calibration completes in a few seconds; surface the FC's
         # actual verdict (e.g. DENIED while moving) instead of assuming success.
-        await self._wait_for_ack(241, timeout=10.0)
+        await self._wait_for_ack(241, timeout=10.0, fut=ack)
         logger.info("LEVEL HORIZON accepted by %s", self.drone.name)
 
     async def set_velocity(self, forward: float, right: float, up: float, yaw_rate: float) -> None:
@@ -1736,6 +1776,12 @@ class MavlinkWorker(DroneWorker):
     # ---- mission upload ----------------------------------------------------
     async def upload_mission(self, waypoints: list[Waypoint]) -> None:
         self._require_mav()
+        # Two overlapping uploads to one drone interleave MISSION_REQUESTs on
+        # the shared queue and both fail; run them one after the other.
+        async with self._mission_lock:
+            await self._upload_mission_locked(waypoints)
+
+    async def _upload_mission_locked(self, waypoints: list[Waypoint]) -> None:
         self._mission_buffer = waypoints
         loop = asyncio.get_running_loop()
         from pymavlink import mavutil as _mu
@@ -1970,12 +2016,13 @@ class MavlinkWorker(DroneWorker):
 
     async def clear_mission(self) -> None:
         self._require_mav()
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._mav.mav.mission_clear_all_send(
-                self._mav.target_system, self._mav.target_component
-            ),
-        )
+        async with self._mission_lock:
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._mav.mav.mission_clear_all_send(
+                    self._mav.target_system, self._mav.target_component
+                ),
+            )
         logger.info("MISSION CLEAR sent to %s", self.drone.name)
 
     async def set_flight_mode(self, mode: str) -> None:

@@ -6,6 +6,7 @@ import {
   Grid, ChevronUp, ChevronDown
 } from "lucide-react";
 import { useGCS, useSelectedDrones } from "@/store/gcsStore";
+import { uploadMissionToTargets } from "@/utils/swarm";
 import { commandsApi, dronesApi } from "@/services/api";
 import AddDroneDialog from "@/components/AddDroneDialog";
 import MissionLibraryDialog from "@/components/MissionLibraryDialog";
@@ -378,8 +379,12 @@ export default function TopToolbar() {
     const ids = targetIds();
     if (!ids.length) return toast.error("Select drones to upload mission");
     try {
-      await commandsApi.send(ids, "upload_mission", { waypoints: draftMission.waypoints });
-      toast.success(`Mission uploaded to ${ids.length} drone(s)`);
+      const { plans, lead } = await uploadMissionToTargets(ids, draftMission.waypoints);
+      toast.success(
+        plans.length > 1
+          ? `Mission uploaded to ${plans.length} drones in formation (offsets relative to ${lead?.name})`
+          : "Mission uploaded to 1 drone"
+      );
     } catch (e) {
       toast.error(`Mission upload failed: ${e.response?.data?.detail || e.message}`);
     }
@@ -417,7 +422,9 @@ export default function TopToolbar() {
   return (
     <div
       data-testid="top-toolbar"
-      className="h-14 border-b border-zinc-700 bg-zinc-900 flex items-center gap-2 px-3 z-[9999] relative"
+      // flex-wrap: with many drones selected the toolbar is wider than common
+      // screens; the page clips overflow, which made Start/E-STOP unreachable.
+      className="min-h-14 border-b border-zinc-700 bg-zinc-900 flex flex-wrap items-center gap-x-2 gap-y-1 py-1 px-3 z-[9999] relative"
     >
       {/* Brand */}
       <div className="flex items-center gap-2 mr-3">

@@ -19,6 +19,33 @@ const _syncDraft = (s, updatedMissions = null) => {
   };
 };
 
+const MAX_TRAIL = 500;
+
+/**
+ * Live "drone" events carry only `trail_tail` (newest points) instead of the
+ * whole trail; append the points we don't have yet to the trail we already
+ * hold (full trail comes with the snapshot).
+ */
+export const mergeTrail = (prev, incoming) => {
+  if (!incoming || !("trail_tail" in incoming)) return incoming;
+  const { trail_tail: tail = [], ...rest } = incoming;
+  const old = prev?.trail || [];
+  let trail;
+  if (!old.length) {
+    trail = tail.slice();
+  } else {
+    const last = old[old.length - 1];
+    let idx = -1;
+    for (let i = tail.length - 1; i >= 0; i--) {
+      if (tail[i][0] === last[0] && tail[i][1] === last[1]) { idx = i; break; }
+    }
+    const fresh = tail.slice(idx + 1);
+    trail = fresh.length ? old.concat(fresh) : old; // keep the same array when nothing changed
+  }
+  if (trail.length > MAX_TRAIL) trail = trail.slice(-MAX_TRAIL);
+  return { ...rest, trail };
+};
+
 /**
  * Central GCS state store with per-drone draft mission isolation.
  */
@@ -56,7 +83,7 @@ export const useGCS = create((set, get) => ({
   upsertDrone: (d) => {
     if (!d || !d.id) return;
     set((s) => {
-      const drones = { ...s.drones, [d.id]: d };
+      const drones = { ...s.drones, [d.id]: mergeTrail(s.drones[d.id], d) };
       if (s.activeDroneId) return { drones };
       // First drone becomes active: switch the visible draft to its key too,
       // otherwise edits go to the drone's draft while the old one is displayed.

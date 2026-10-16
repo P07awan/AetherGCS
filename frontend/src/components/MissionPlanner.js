@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { commandsApi, missionsApi } from "@/services/api";
 import { useGCS, useSelectedDrones } from "@/store/gcsStore";
+import { uploadMissionToTargets } from "@/utils/swarm";
 import { Trash2, Save, Play, Pause, StepForward, Square, Upload, Route as RouteIcon, PlusCircle, ArrowUp, ArrowDown } from "lucide-react";
 
 const Btn = ({ children, onClick, testid, variant = "default", disabled }) => {
@@ -43,8 +44,12 @@ export default function MissionPlanner() {
     const ids = targetIds();
     if (!ids.length) return toast.error("Select a drone");
     try {
-      await commandsApi.send(ids, "upload_mission", { waypoints: draft.waypoints });
-      toast.success(`Mission uploaded to ${ids.length} drone(s)`);
+      const { plans, lead } = await uploadMissionToTargets(ids, draft.waypoints);
+      toast.success(
+        plans.length > 1
+          ? `Mission uploaded to ${plans.length} drones in formation (offsets relative to ${lead?.name})`
+          : "Mission uploaded to 1 drone"
+      );
     } catch (e) {
       toast.error(`Upload failed: ${e.response?.data?.detail || e.message}`);
     }

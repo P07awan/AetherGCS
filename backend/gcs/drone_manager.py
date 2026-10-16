@@ -281,6 +281,8 @@ class DroneManager:
             if cmd not in ("connect", "disconnect") and worker.drone.status != "connected":
                 if isinstance(worker, SimulatorWorker):
                     await worker.connect()
+                elif worker.drone.status == "error" and worker.drone.last_error:
+                    raise RuntimeError(f"Drone '{worker.drone.name}': {worker.drone.last_error}")
                 else:
                     raise RuntimeError(
                         f"Drone '{worker.drone.name}' is disconnected. "

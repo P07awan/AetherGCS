@@ -23,6 +23,17 @@ class CommandLogStore:
         except Exception:
             pass
 
+    async def add_many(self, entries: List[CommandLog]) -> None:
+        """Record several entries with a single database round trip."""
+        if not entries:
+            return
+        self._history[:0] = list(reversed(entries))
+        del self._history[self.MAX_LOG:]
+        try:
+            await get_db()[self.COLLECTION].insert_many([e.model_dump() for e in entries])
+        except Exception:
+            pass
+
     async def list(self, limit: int = 200) -> List[CommandLog]:
         try:
             docs = (

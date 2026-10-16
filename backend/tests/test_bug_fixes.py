@@ -248,3 +248,143 @@ def test_disconnect_aborts_inflight_connect_without_reconnect_loop():
         assert w._task is None  # no orphaned reconnect loop
         assert w.drone.status == "disconnected"
     asyncio.run(_run())
+
+
+def _connected_mav_worker(sysid=1):
+    w = MavlinkWorker(_udp_drone(14596), on_update=lambda d: None)
+    w.drone.system_id = sysid
+    w.drone.status = "connected"
+    w._running = True
+    w._mav = MagicMock()
+    w._hardware_sysid = sysid
+    return w
+
+
+def _ack(cmd, result=0):
+    m = MagicMock()
+    m.get_type.return_value = "COMMAND_ACK"
+    m.get_srcSystem.return_value = 1
+    m.command = cmd
+    m.result = result
+    return m
+
+
+def test_concurrent_commands_on_one_drone_get_their_own_acks():
+    async def _run():
+        w = _connected_mav_worker()
+        level = w._expect_ack(241)
+        arm = w._expect_ack(400)
+        t_level = asyncio.create_task(w._wait_for_ack(241, timeout=2, fut=level))
+        t_arm = asyncio.create_task(w._wait_for_ack(400, timeout=2, fut=arm))
+        await asyncio.sleep(0)
+        w._handle_message(_ack(400))       # arm's ACK arrives first
+        w._handle_message(_ack(241, 5))    # IN_PROGRESS is not final
+        await asyncio.sleep(0.05)
+        assert not t_level.done()
+        w._handle_message(_ack(241, 2))    # then calibration DENIED
+        await t_arm                        # accepted
+        try:
+            await t_level
+            raise AssertionError("DENIED should raise")
+        except RuntimeError as e:
+            assert "DENIED" in str(e)
+    asyncio.run(_run())
+
+
+def test_link_lost_then_regained():
+    async def _run():
+        w = _connected_mav_worker()
+        w._last_hb_rx = 0.0  # long ago
+        w._check_link()
+        assert w.drone.status == "error"
+        assert "Link lost" in w.drone.last_error
+        try:
+            w._require_mav()
+            raise AssertionError("commands must be refused while the link is lost")
+        except RuntimeError as e:
+            assert "Link lost" in str(e)
+        hb = MagicMock()
+        hb.get_type.return_value = "HEARTBEAT"
+        hb.get_srcSystem.return_value = 1
+        hb.autopilot, hb.type, hb.base_mode, hb.custom_mode = 3, 2, 0, 0
+        w.drone.firmware = "ArduPilot (live)"
+        w._handle_message(hb)
+        assert w.drone.status == "connected" and w.drone.last_error is None
+        assert w.drone.telemetry.heartbeat is True
+    asyncio.run(_run())
+
+
+def test_concurrent_mission_uploads_to_one_drone_are_serialized():
+    async def _run():
+        w = _connected_mav_worker()
+        active, overlaps = 0, []
+
+        async def _fake_upload(wps):
+            nonlocal active
+            active += 1
+            overlaps.append(active)
+            await asyncio.sleep(0.05)
+            active -= 1
+        w._upload_mission_locked = _fake_upload
+        await asyncio.gather(w.upload_mission([]), w.upload_mission([]), w.upload_mission([]))
+        assert max(overlaps) == 1
+    asyncio.run(_run())
+
+
+class _FakeWS:
+    def __init__(self, stuck=False):
+        self.stuck, self.sent, self.closed = stuck, [], False
+        self._never = asyncio.Event()
+
+    async def accept(self):
+        pass
+
+    async def send_json(self, msg):
+        if self.stuck and msg.get("event") != "snapshot":
+            await self._never.wait()  # a sleeping tab that never reads: send blocks forever
+        self.sent.append(msg)
+
+    async def close(self, code=1000):
+        self.closed = True
+
+
+def test_stalled_websocket_client_does_not_freeze_others():
+    import server
+
+    async def _run():
+        b = server.Broadcaster()
+        b.CLIENT_QUEUE = 50
+        stuck, live = _FakeWS(stuck=True), _FakeWS()
+        await b.connect(stuck)
+        await b.connect(live)
+        for i in range(200):
+            b.push("drone", {"i": i})
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
+        assert [m["data"]["i"] for m in live.sent if m["event"] == "drone"] == list(range(200))
+        assert stuck not in b.clients  # dropped once it fell CLIENT_QUEUE behind
+        await asyncio.sleep(0.05)
+        assert stuck.closed
+        await b.stop()
+    asyncio.run(_run())
+
+
+def test_drone_broadcast_sends_trail_tail_not_full_trail():
+    import server
+
+    async def _run():
+        d = _sim_drone()
+        d.trail = [[37.0 + k * 1e-5, -122.0] for k in range(300)]
+        server.drone_manager.workers[d.id] = SimpleNamespace(drone=d)
+        pushed = []
+        orig = server.broadcaster.push
+        server.broadcaster.push = lambda ev, p: pushed.append(p)
+        server._last_broadcast.pop(d.id, None)
+        try:
+            server._on_drone_update(d)
+        finally:
+            server.broadcaster.push = orig
+            server.drone_manager.workers.pop(d.id, None)
+        assert "trail" not in pushed[0]
+        assert pushed[0]["trail_tail"] == d.trail[-server._TRAIL_TAIL:]
+    asyncio.run(_run())
