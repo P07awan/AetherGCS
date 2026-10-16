@@ -79,6 +79,15 @@ export default function CommandHistory() {
               {c.response_ms != null ? `${c.response_ms}ms` : "—"}
             </span>
             <span className="text-right"><StatusPill status={c.status} /></span>
+            {c.error && (
+              <span
+                data-testid={`cmd-log-error-${c.id}`}
+                className="col-span-full text-[10px] text-[#FF6685] break-words pl-[98px] -mt-0.5"
+                title={c.error}
+              >
+                ⚠ {c.error}
+              </span>
+            )}
           </div>
         ))}
       </div>

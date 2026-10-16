@@ -91,6 +91,8 @@ class DroneManager:
             logger.warning("MongoDB unavailable for loading saved drones: %s", e)
 
     async def _persist(self, drone: Drone) -> None:
+        if drone.id not in self.workers:
+            return  # removed meanwhile (e.g. during a slow connect) — don't resurrect it
         try:
             db = get_db()
             doc = drone.model_dump()
@@ -238,9 +240,12 @@ class DroneManager:
 
     # ---- connection ---------------------------------------------------
     async def connect(self, drone_id: str) -> Drone:
+        """Connect a drone. Raises RuntimeError with the reason if the link fails."""
         worker = self.workers[drone_id]
-        await worker.connect()
-        await self._persist(worker.drone)
+        try:
+            await worker.connect()
+        finally:
+            await self._persist(worker.drone)
         return worker.drone
 
     async def disconnect(self, drone_id: str) -> Drone:
@@ -250,7 +255,7 @@ class DroneManager:
         return worker.drone
 
     async def connect_all(self) -> None:
-        await asyncio.gather(*[w.connect() for w in self.workers.values()])
+        await asyncio.gather(*[w.connect() for w in self.workers.values()], return_exceptions=True)
 
     # ---- commands (broadcast) -----------------------------------------
     async def send_command(self, drone_ids: Iterable[str], command: str, params: dict) -> list[dict]:

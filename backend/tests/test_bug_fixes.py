@@ -150,3 +150,101 @@ def test_throttled_status_change_is_still_broadcast():
             server.broadcaster.push = orig_push
             server.drone_manager.workers.pop(d.id, None)
     asyncio.run(_run())
+
+
+def _udp_drone(port):
+    return Drone(
+        name="Udp", system_id=1, component_id=1,
+        connection=ConnectionProfile(connection_type="udp", address="127.0.0.1", port=port,
+                                     auto_reconnect=True),
+        home_lat=0, home_lon=0, home_alt=0,
+    )
+
+
+def test_failed_connect_raises_even_with_auto_reconnect():
+    async def _run():
+        w = MavlinkWorker(_udp_drone(14598), on_update=lambda d: None)
+
+        async def _fail():
+            raise TimeoutError("No heartbeat")
+        w._open_link = _fail
+        w.RECONNECT_DELAY = 60
+        try:
+            await w.connect()
+            raise AssertionError("connect() should raise")
+        except RuntimeError as e:
+            assert "heartbeat" in str(e).lower()
+        await w.disconnect()
+    asyncio.run(_run())
+
+
+def test_disconnect_during_connect_releases_udp_port():
+    import socket
+
+    port = 14599
+
+    async def _run():
+        w = MavlinkWorker(_udp_drone(port), on_update=lambda d: None)
+        task = asyncio.create_task(w.connect())
+        await asyncio.sleep(1.5)  # link open, waiting for a heartbeat that never comes
+        await w._cancel_reconnect()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await w.disconnect()
+        await asyncio.sleep(1.5)  # let the heartbeat thread notice the abort
+
+    asyncio.run(_run())
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("127.0.0.1", port))  # fails with "address in use" if the link leaked
+    finally:
+        s.close()
+
+
+def test_sim_estop_in_air_falls_to_ground():
+    async def _run():
+        w = _airborne_sim(alt=10.0)
+        await w.emergency_stop()
+        for _ in range(10):
+            w._simulator_tick(0.2)
+        assert w.drone.telemetry.altitude_relative == 0.0
+        assert w.drone.telemetry.armed is False
+    asyncio.run(_run())
+
+
+def test_sim_level_horizon_refused_while_armed():
+    async def _run():
+        w = _airborne_sim(alt=0.0)
+        try:
+            await w.level_horizon()
+            raise AssertionError("level_horizon should be refused while armed")
+        except RuntimeError as e:
+            assert "armed" in str(e).lower()
+        w.drone.telemetry.armed = False
+        await w.level_horizon()
+    asyncio.run(_run())
+
+
+def test_disconnect_aborts_inflight_connect_without_reconnect_loop():
+    async def _run():
+        w = MavlinkWorker(_udp_drone(14597), on_update=lambda d: None)
+        started = asyncio.Event()
+
+        async def _slow_open():
+            started.set()
+            await asyncio.sleep(30)
+        w._open_link = _slow_open
+        connect = asyncio.create_task(w.connect())  # e.g. a REST request
+        await started.wait()
+        await w.disconnect()  # e.g. remove_drone
+        try:
+            await connect
+            raise AssertionError("connect() should fail when disconnected mid-attempt")
+        except RuntimeError as e:
+            assert "cancelled" in str(e)
+        assert w._task is None  # no orphaned reconnect loop
+        assert w.drone.status == "disconnected"
+    asyncio.run(_run())

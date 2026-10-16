@@ -23,6 +23,7 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
   let heartbeatInterval = null;
   let reconnectTimer = null;
   let rafId = null;
+  let flushTimer = null;
 
   const connect = () => {
     if (closed) return;
@@ -54,8 +55,12 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
     let rafScheduled = false;
 
     const flushDrones = () => {
+      if (!rafScheduled) return; // already flushed by the other trigger
       rafScheduled = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      if (flushTimer) clearTimeout(flushTimer);
       rafId = null;
+      flushTimer = null;
       if (closed) return;
       const dronesToUpdate = Object.values(pendingDroneMap);
       pendingDroneMap = {};
@@ -74,6 +79,9 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
             if (!rafScheduled) {
               rafScheduled = true;
               rafId = requestAnimationFrame(flushDrones);
+              // rAF is paused while the tab is hidden/minimized/occluded; the
+              // timer keeps the store live so telemetry doesn't freeze.
+              flushTimer = setTimeout(flushDrones, 250);
             }
           }
           break;
@@ -121,6 +129,10 @@ export function createTelemetrySocket({ onSnapshot, onDrone, onDroneRemoved, onC
       if (rafId) {
         cancelAnimationFrame(rafId);
         rafId = null;
+      }
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
       }
       try { ws?.close(); } catch {}
     },

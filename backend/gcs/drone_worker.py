@@ -10,6 +10,7 @@ import asyncio
 import logging
 import math
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
@@ -381,6 +382,14 @@ class SimulatorWorker(DroneWorker):
         self.on_update(self.drone)
 
     async def level_horizon(self) -> None:
+        # Mirror ArduPilot: calibration is refused while armed.
+        if self.drone.telemetry.armed:
+            raise RuntimeError(
+                "Cannot level horizon while armed. LAND and DISARM the drone first."
+            )
+        t = self.drone.telemetry
+        t.pitch = 0.0
+        t.roll = 0.0
         logger.info("Level horizon executed on simulator %s", self.drone.name)
         self.on_update(self.drone)
 
@@ -617,6 +626,10 @@ class SimulatorWorker(DroneWorker):
             t.ground_speed = 0.0
             t.air_speed = 0.0
             t.battery_current = 0.3
+            # Motors off (e.g. E-STOP in the air): drop instead of hanging mid-air.
+            if t.altitude_relative > 0.0:
+                t.altitude_relative = max(0.0, t.altitude_relative - 9.0 * dt)
+                t.altitude_msl = d.home_alt + t.altitude_relative
 
         curr_sats = t.satellites if t.satellites is not None else 14
         t.satellites = max(6, min(20, curr_sats + random.choice([-1, 0, 0, 0, 1])))
@@ -654,6 +667,10 @@ class MavlinkWorker(DroneWorker):
         self._ack_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         # Last STATUSTEXT lines (ring buffer) — captures pre-arm check failures
         self._recent_statustext: list[str] = []
+        # In-flight connect() link attempt, owned here so disconnect()/remove
+        # can cancel it even though connect() runs in the caller's task.
+        self._connect_task: Optional[asyncio.Task] = None
+        self._disconnect_requested = False
         # Clean any historical dummy coordinates or Null Island points from trail
         self.drone.trail = [
             p for p in (self.drone.trail or [])
@@ -702,6 +719,7 @@ class MavlinkWorker(DroneWorker):
         # self._task is overwritten below.
         await self._cancel_reconnect()
         await self._close_mav()
+        self._disconnect_requested = False
         self.drone.status = "connecting"
         self.drone.last_error = None
         self.on_update(self.drone)
@@ -712,9 +730,17 @@ class MavlinkWorker(DroneWorker):
             self.drone.connection.address or "—",
             self.drone.connection.port or "—",
         )
+        self._connect_task = asyncio.ensure_future(self._open_link())
         try:
-            await self._open_link()
+            await self._connect_task
+        except asyncio.CancelledError:
+            if not self._disconnect_requested:
+                raise  # our caller was cancelled — propagate
+            # disconnect()/remove_drone() aborted this attempt: no reconnect loop.
+            raise RuntimeError("Connection attempt cancelled: drone was disconnected or removed")
         except Exception as exc:
+            if self._disconnect_requested:
+                raise RuntimeError("Connection attempt cancelled: drone was disconnected or removed")
             err_msg = str(exc)
             if "No module named 'serial'" in err_msg:
                 err_msg = "pyserial package is not installed in backend python environment"
@@ -733,7 +759,16 @@ class MavlinkWorker(DroneWorker):
                 self._task = asyncio.create_task(
                     self._reconnect_loop(), name=f"mav-reconnect-{self.drone.id}"
                 )
-            return
+            # Raise so callers (REST connect, "connect" command) report the
+            # failure. Checking drone.status afterwards is unreliable: the
+            # reconnect loop flips it back to "connecting" almost immediately.
+            raise RuntimeError(err_msg)
+        finally:
+            self._connect_task = None
+
+        if self._disconnect_requested:  # disconnected right as the link came up
+            await self._close_mav()
+            raise RuntimeError("Connection attempt cancelled: drone was disconnected or removed")
 
         self._running = True
         self.drone.status = "connected"
@@ -744,14 +779,15 @@ class MavlinkWorker(DroneWorker):
 
     async def disconnect(self) -> None:
         self._running = False
-        for t in (self._task, self._hb_task, self._rx_task):
+        self._disconnect_requested = True
+        for t in (self._connect_task, self._task, self._hb_task, self._rx_task):
             if t:
                 t.cancel()
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-        self._task = self._hb_task = self._rx_task = None
+        self._connect_task = self._task = self._hb_task = self._rx_task = None
 
         await self._close_mav()
 
@@ -779,6 +815,28 @@ class MavlinkWorker(DroneWorker):
 
     # ---- internal link setup -----------------------------------------------
     async def _open_link(self) -> None:
+        """Open the MAVLink link and wait for a heartbeat (sets self._mav on success).
+
+        The blocking open / heartbeat wait run in executor threads that asyncio
+        cannot cancel. If this coroutine is cancelled (disconnect, remove, a new
+        connect) or fails, signal those threads to stop and close any link they
+        opened — otherwise the socket/serial port stays bound with no owner.
+        """
+        abort = threading.Event()
+        opened: list = []
+        try:
+            await self._open_link_inner(abort, opened)
+        except BaseException:
+            abort.set()
+            for m in opened:
+                if m is not self._mav:
+                    try:
+                        m.close()
+                    except Exception:
+                        pass
+            raise
+
+    async def _open_link_inner(self, abort: threading.Event, opened: list) -> None:
         from pymavlink import mavutil
 
         conn_str  = self._connection_string()
@@ -794,9 +852,13 @@ class MavlinkWorker(DroneWorker):
         # mavlink_connection is blocking — run in thread executor
         def _open():
             if ct == "serial":
-                return mavutil.mavlink_connection(conn_str, baud=baud, autoreconnect=True)
+                m = mavutil.mavlink_connection(conn_str, baud=baud, autoreconnect=True)
             else:
-                return mavutil.mavlink_connection(conn_str, autoreconnect=True)
+                m = mavutil.mavlink_connection(conn_str, autoreconnect=True)
+            opened.append(m)
+            if abort.is_set():  # caller gave up while we were opening
+                m.close()
+            return m
 
         try:
             mav = await asyncio.wait_for(
@@ -842,7 +904,7 @@ class MavlinkWorker(DroneWorker):
 
         def _wait_hb():
             start_t = time.time()
-            while time.time() - start_t < self.CONNECT_TIMEOUT:
+            while time.time() - start_t < self.CONNECT_TIMEOUT and not abort.is_set():
                 hb_candidate = mav.wait_heartbeat(timeout=1.0)
                 if hb_candidate is None or not _is_autopilot_heartbeat(hb_candidate):
                     continue
@@ -1567,6 +1629,17 @@ class MavlinkWorker(DroneWorker):
         param5=1 would start the full 6-orientation accelerometer calibration instead.
         """
         self._require_mav()
+        if self.drone.telemetry.armed:
+            raise RuntimeError(
+                "Cannot level horizon while armed. LAND and DISARM the drone first."
+            )
+        # Clear stale ACKs so we read the result of THIS calibration
+        while not self._ack_queue.empty():
+            try:
+                self._ack_queue.get_nowait()
+            except Exception:
+                break
+        self._recent_statustext.clear()
         await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: self._send_command_long(
@@ -1575,6 +1648,10 @@ class MavlinkWorker(DroneWorker):
             ),
         )
         logger.info("LEVEL HORIZON sent to %s", self.drone.name)
+        # Board-level calibration completes in a few seconds; surface the FC's
+        # actual verdict (e.g. DENIED while moving) instead of assuming success.
+        await self._wait_for_ack(241, timeout=10.0)
+        logger.info("LEVEL HORIZON accepted by %s", self.drone.name)
 
     async def set_velocity(self, forward: float, right: float, up: float, yaw_rate: float) -> None:
         """Send SET_POSITION_TARGET_LOCAL_NED velocity command."""

@@ -8,12 +8,15 @@ export default function MissionPlannerHUD({ className = "" }) {
   const drone = useActiveDrone();
 
   const handleLevelHorizon = async () => {
-    if (!drone) return;
+    if (!drone) {
+      toast.error("No active drone selected for Level Horizon");
+      return;
+    }
     try {
       await commandsApi.send([drone.id], "level_horizon");
-      toast.success(`Level Horizon calibration command sent to ${drone.name}`);
+      toast.success(`Level Horizon calibration accepted by ${drone.name}`);
     } catch (e) {
-      toast.error("Failed to send Level Horizon command: " + e.message);
+      toast.error(`Level Horizon failed: ${e.response?.data?.detail || e.message}`);
     }
   };
 

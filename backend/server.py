@@ -210,10 +210,10 @@ async def delete_drone(drone_id: str):
 async def connect_drone(drone_id: str):
     if not drone_manager.get_drone(drone_id):
         raise HTTPException(404, "Drone not found")
-    drone = await drone_manager.connect(drone_id)
-    if drone.status == "error" and drone.last_error:
-        raise HTTPException(400, f"Connection failed: {drone.last_error}")
-    return drone
+    try:
+        return await drone_manager.connect(drone_id)
+    except RuntimeError as e:
+        raise HTTPException(400, f"Connection failed: {e}")
 
 
 @api.post("/drones/{drone_id}/disconnect", response_model=Drone)
